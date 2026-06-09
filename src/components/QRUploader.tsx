@@ -13,7 +13,12 @@ const QRUploader: React.FC = () => {
         if (window.electron) {
           const result = await window.electron.getQRImage();
           if (result.success && result.data) {
-            setQrImage(result.data);
+            const src = String(result.data);
+            setQrImage(
+              src.startsWith('data:') || src.startsWith('file:')
+                ? src
+                : `file://${src.replace(/\\/g, '/')}`
+            );
           }
         }
       } catch (error) {
@@ -31,8 +36,13 @@ const QRUploader: React.FC = () => {
     try {
       if (window.electron) {
         const result = await window.electron.uploadQRImage();
-        if (result.success) {
-          setQrImage(result.path);
+        if (result.success && result.path) {
+          const path = String(result.path);
+          setQrImage(
+            path.startsWith('data:') || path.startsWith('file:')
+              ? path
+              : `file://${path.replace(/\\/g, '/')}`
+          );
         } else {
           setErrorMessage(result.error || 'Failed to upload QR image');
         }

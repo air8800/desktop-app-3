@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Users, TrendingUp, CheckCircle, Download, RefreshCw, Calendar, DollarSign, UserPlus, UserCheck, Target, Award, BarChart3, PieChart, ArrowUp, ArrowDown, Filter, Search, Eye, MoreVertical } from 'lucide-react';
+import { Users, TrendingUp, CheckCircle, Download, RefreshCw, Calendar, IndianRupee, UserPlus, UserCheck, Target, Award, BarChart3, PieChart, ArrowUp, ArrowDown, Filter, Search, Eye, MoreVertical } from 'lucide-react';
 
 const CustomerReports: React.FC = () => {
   const [timeRange, setTimeRange] = useState<'7d' | '30d' | '90d' | '1y'>('30d');
@@ -225,7 +225,7 @@ const CustomerReports: React.FC = () => {
             <div className="card-full-height p-6 bg-gradient-to-r from-orange-50 to-yellow-50 dark:from-orange-900/30 dark:to-yellow-900/30 border-orange-200 dark:border-orange-800">
               <div className="flex items-center justify-between mb-4">
                 <div className="w-12 h-12 bg-orange-500 rounded-xl flex items-center justify-center shadow-soft">
-                  <DollarSign className="h-6 w-6 text-white" />
+                  <IndianRupee className="h-6 w-6 text-white" />
                 </div>
                 <div className="flex items-center text-orange-600 dark:text-orange-400">
                   <Award className="h-4 w-4 mr-1" />

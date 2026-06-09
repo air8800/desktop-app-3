@@ -1,25 +1,32 @@
 {
-  "name": "xerox-shop-desktop",
+  "name": "printget-shop-manager",
   "private": true,
-  "version": "1.0.0",
-  "type": "module",
-  "description": "Xerox Shop Management Desktop App",
+  "version": "10.0.0",
+  "description": "PrintGet Shop Manager — desktop app for print shop partners",
+  "author": "PrintGet",
+  "license": "UNLICENSED",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
-    "electron:build": "npm run build && electron-builder",
-    "electron:preview": "npm run build && electron ."
+    "icons": "node scripts/generate-icons.mjs",
+    "predist": "npm run icons",
+    "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron:preview": "npm run build && electron .",
+    "dist": "npm run build && electron-builder --win --x64",
+    "dist:dir": "npm run build && electron-builder --win --x64 --dir",
+    "electron:build": "npm run dist"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^16.5.0",
     "@supabase/supabase-js": "^2.39.0",
     "electron-is-dev": "^2.0.0",
     "electron-store": "^8.1.0",
+    "electron-updater": "^6.8.9",
     "lucide-react": "^0.344.0",
+    "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^3.11.174",
     "qrcode": "^1.5.3",
     "react": "^18.3.1",
@@ -41,7 +48,9 @@
     "eslint-plugin-react-hooks": "^5.1.0-rc.0",
     "eslint-plugin-react-refresh": "^0.4.11",
     "globals": "^15.9.0",
+    "png-to-ico": "^2.1.8",
     "postcss": "^8.4.35",
+    "sharp": "^0.33.5",
     "tailwindcss": "^3.4.1",
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.3.0",
@@ -51,29 +60,100 @@
     "wait-on": "^7.2.0"
   },
   "build": {
-    "appId": "com.xeroxshop.desktop",
-    "productName": "Xerox Shop Manager",
+    "appId": "com.printget.shopmanager",
+    "productName": "PrintGet Shop Manager",
+    "copyright": "Copyright © 2026 PrintGet",
+    "artifactName": "PrintGet-Shop-Manager-Setup-${version}.${ext}",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "air8800",
+        "repo": "desktop-app-3",
+        "releaseType": "release"
+      }
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/*.node"
+    ],
+    "compression": "maximum",
     "directories": {
-      "output": "dist_electron"
+      "output": "release",
+      "buildResources": "build"
     },
     "files": [
       "dist/**/*",
-      "electron/**/*"
+      "electron/**/*",
+      "!electron/test_*",
+      "!electron/**/*.pdf",
+      "!electron/diagnose.js",
+      "!electron/**/*.txt"
     ],
-    "mac": {
-      "category": "public.app-category.business"
-    },
+    "extraResources": [
+      {
+        "from": "./extraResources/",
+        "to": "extraResources",
+        "filter": [
+          "**/*",
+          "!**/test pdf.pdf",
+          "!**/Examples/**"
+        ]
+      }
+    ],
     "win": {
       "target": [
-        "nsis"
-      ]
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icons/icon.ico",
+      "publisherName": "PrintGet",
+      "legalTrademarks": "PrintGet Shop Manager",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "installerIcon": "build/icons/icon.ico",
+      "uninstallerIcon": "build/icons/icon.ico",
+      "installerHeader": "build/installerHeader.bmp",
+      "installerSidebar": "build/installerSidebar.bmp",
+      "installerHeaderIcon": "build/icons/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "PrintGet Shop Manager",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    },
+    "mac": {
+      "category": "public.app-category.business",
+      "icon": "build/icons/icon.png",
+      "target": [
+        "dmg"
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
     },
     "linux": {
       "target": [
         "AppImage",
         "deb"
       ],
-      "category": "Office"
-    }
+      "category": "Office",
+      "icon": "build/icons"
+    },
+    "protocols": [
+      {
+        "name": "PrintGet OAuth",
+        "schemes": [
+          "printget"
+        ]
+      }
+    ]
   }
 }

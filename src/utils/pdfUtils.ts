@@ -1,7 +1,13 @@
 import * as pdfjsLib from 'pdfjs-dist';
+import { assetUrl } from './assetUrl';
 
-// Set the worker source path
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`;
+// Resolve worker/cMap paths relative to the document URL so they work both in
+// dev (served from "/") and in production Electron builds loaded via file://,
+// where a leading "/" would incorrectly resolve to the filesystem root.
+const PDF_WORKER_SRC = assetUrl('pdf-worker/pdf.worker.min.js');
+const PDF_CMAP_URL = assetUrl('pdf-worker/cmaps/');
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_SRC;
 
 // PDF Document Cache - dramatically improves performance by avoiding re-downloads
 interface CachedPdfDocument {
@@ -17,7 +23,10 @@ const CACHE_EXPIRY_MS = 10 * 60 * 1000;
  * Get or load a PDF document with caching
  * This dramatically speeds up repeated access to the same PDF
  */
-export const getCachedPdfDocument = async (fileUrl: string): Promise<pdfjsLib.PDFDocumentProxy> => {
+export const getCachedPdfDocument = async (
+  fileUrl: string,
+  onProgress?: (loaded: number, total: number) => void
+): Promise<pdfjsLib.PDFDocumentProxy> => {
   const cached = pdfCache.get(fileUrl);
   const now = Date.now();
 
@@ -32,27 +41,38 @@ export const getCachedPdfDocument = async (fileUrl: string): Promise<pdfjsLib.PD
     cached.document.destroy();
   }
 
-  console.log('📥 Loading PDF document from network:', fileUrl);
-  
+  console.log('📥 Loading PDF document:', fileUrl);
+
   const loadingTask = pdfjsLib.getDocument({
     url: fileUrl,
-    cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',
+    cMapUrl: PDF_CMAP_URL,
     cMapPacked: true,
     disableRange: false,
     disableStream: false,
     disableAutoFetch: false
   });
-  
+
+  // Track download progress if callback provided
+  if (onProgress) {
+    loadingTask.onProgress = (progressData: { loaded: number; total: number }) => {
+      if (progressData.total > 0) {
+        const percent = Math.round((progressData.loaded / progressData.total) * 100);
+        console.log(`📥 Download progress: ${percent}% (${Math.round(progressData.loaded / 1024)}KB / ${Math.round(progressData.total / 1024)}KB)`);
+        onProgress(progressData.loaded, progressData.total);
+      }
+    };
+  }
+
   const pdfDocument = await loadingTask.promise;
-  
+
   pdfCache.set(fileUrl, {
     document: pdfDocument,
     url: fileUrl,
     loadedAt: now
   });
-  
+
   console.log(`💾 PDF cached (cache size: ${pdfCache.size})`);
-  
+
   return pdfDocument;
 };
 
@@ -74,9 +94,9 @@ export const clearPdfCache = () => {
  */
 export const preloadPdf = async (fileUrl: string): Promise<void> => {
   if (!fileUrl) return;
-  
+
   console.log('🚀 Preloading PDF in background:', fileUrl);
-  
+
   try {
     await getCachedPdfDocument(fileUrl);
     console.log('✅ PDF preloaded successfully:', fileUrl);
@@ -108,20 +128,20 @@ export interface PdfInfo {
 export const getPdfInfo = async (fileUrl: string): Promise<PdfInfo> => {
   try {
     const pdfDocument = await getCachedPdfDocument(fileUrl);
-    
+
     // Get the first page to determine size
     const page = await pdfDocument.getPage(1);
     const viewport = page.getViewport({ scale: 1.0 });
-    
-    // Get document metadata
-    const metadata = await pdfDocument.getMetadata();
-    
+
+    // Get document metadata with type assertion
+    const metadata = await pdfDocument.getMetadata() as any;
+
     // Determine if portrait or landscape
     const isPortrait = viewport.width <= viewport.height;
-    
+
     // Determine suggested paper size based on dimensions
     const suggestedPaperSize = determinePaperSize(viewport.width, viewport.height);
-    
+
     return {
       numPages: pdfDocument.numPages,
       pageSize: {
@@ -157,12 +177,12 @@ export const calculateOptimalScale = (
   maxScale: number = 1.5
 ): number => {
   // Calculate scale to fit width and height
-  const scaleX = (containerWidth * 0.9) / pdfWidth; // 90% of container width for padding
-  const scaleY = (containerHeight * 0.9) / pdfHeight; // 90% of container height for padding
-  
+  const scaleX = (containerWidth * 0.85) / pdfWidth; // 85% of container width for padding
+  const scaleY = (containerHeight * 0.85) / pdfHeight; // 85% of container height for padding
+
   // Use the smaller scale to ensure the page fits completely
   const optimalScale = Math.min(scaleX, scaleY);
-  
+
   // Ensure we don't exceed maxScale and don't go below 0.3
   return Math.max(0.3, Math.min(optimalScale, maxScale));
 };
@@ -184,10 +204,10 @@ export const getPdfPageViewport = async (
   try {
     const pdfDocument = await getCachedPdfDocument(fileUrl);
     const page = await pdfDocument.getPage(pageNumber);
-    
+
     // Get page dimensions at scale 1.0
     const baseViewport = page.getViewport({ scale: 1.0 });
-    
+
     // Calculate optimal scale for 100% view
     const optimalScale = calculateOptimalScale(
       baseViewport.width,
@@ -195,10 +215,10 @@ export const getPdfPageViewport = async (
       containerWidth,
       containerHeight
     );
-    
+
     // Get viewport with optimal scale
     const viewport = page.getViewport({ scale: optimalScale });
-    
+
     console.log('📐 PDF Page Viewport Calculation:', {
       pageNumber,
       baseWidth: baseViewport.width,
@@ -209,7 +229,7 @@ export const getPdfPageViewport = async (
       finalWidth: viewport.width,
       finalHeight: viewport.height
     });
-    
+
     return {
       viewport,
       optimalScale,
@@ -232,10 +252,10 @@ const determinePaperSize = (width: number, height: number): string => {
   // Convert to mm (1 pt = 0.352778 mm)
   const widthMm = width * 0.352778;
   const heightMm = height * 0.352778;
-  
+
   // Sort dimensions to compare regardless of orientation
   const [smallerDim, largerDim] = [widthMm, heightMm].sort((a, b) => a - b);
-  
+
   // Standard paper sizes in mm [width, height] (smaller dimension first)
   const paperSizes = {
     'A3': [297, 420],
@@ -245,22 +265,48 @@ const determinePaperSize = (width: number, height: number): string => {
     'Legal': [216, 356],  // 8.5 x 14 inches in mm
     'Executive': [184, 267] // 7.25 x 10.5 inches in mm
   };
-  
+
   // Find the closest match
   let closestSize = 'A4'; // Default
   let minDifference = Number.MAX_VALUE;
-  
+
   for (const [size, [w, h]] of Object.entries(paperSizes)) {
     // Calculate difference as percentage of area
     const areaDiff = Math.abs((smallerDim * largerDim) - (w * h)) / (w * h);
-    
+
     if (areaDiff < minDifference) {
       minDifference = areaDiff;
       closestSize = size;
     }
   }
-  
+
   return closestSize;
+};
+
+/**
+ * Get page dimensions at a specific scale
+ * @param fileUrl URL or path to the PDF file
+ * @param pageNumber Page number (1-based)
+ * @param scale Scale factor
+ * @returns Promise with scaled width and height
+ */
+export const getScaledPageDimensions = async (
+  fileUrl: string,
+  pageNumber: number,
+  scale: number
+): Promise<{ width: number; height: number }> => {
+  try {
+    const pdfDocument = await getCachedPdfDocument(fileUrl);
+    const page = await pdfDocument.getPage(pageNumber);
+    const viewport = page.getViewport({ scale });
+    return {
+      width: viewport.width,
+      height: viewport.height
+    };
+  } catch (error) {
+    console.error('Error getting scaled page dimensions:', error);
+    throw error;
+  }
 };
 
 /**
@@ -278,29 +324,29 @@ export const renderPdfPage = async (
 ): Promise<void> => {
   try {
     const pdfDocument = await getCachedPdfDocument(fileUrl);
-    
+
     // Get the requested page
     const page = await pdfDocument.getPage(pageNumber);
-    
+
     // Set up canvas for rendering
     const viewport = page.getViewport({ scale });
     const context = canvas.getContext('2d');
-    
+
     if (!context) {
       throw new Error('Could not get canvas context');
     }
-    
+
     canvas.height = viewport.height;
     canvas.width = viewport.width;
-    
+
     // Render the page
     const renderContext = {
       canvasContext: context,
       viewport: viewport
     };
-    
+
     await page.render(renderContext).promise;
-    
+
   } catch (error) {
     console.error('Error rendering PDF page:', error);
     throw error;
@@ -310,11 +356,15 @@ export const renderPdfPage = async (
 /**
  * Get the total number of pages in a PDF document
  * @param fileUrl URL or path to the PDF file
+ * @param onProgress Optional callback for download progress updates
  * @returns Promise with the number of pages
  */
-export const getPdfPageCount = async (fileUrl: string): Promise<number> => {
+export const getPdfPageCount = async (
+  fileUrl: string,
+  onProgress?: (loaded: number, total: number) => void
+): Promise<number> => {
   try {
-    const pdfDocument = await getCachedPdfDocument(fileUrl);
+    const pdfDocument = await getCachedPdfDocument(fileUrl, onProgress);
     return pdfDocument.numPages;
   } catch (error) {
     console.error('Error getting PDF page count:', error);
@@ -333,26 +383,26 @@ export const isValidPdf = async (file: File): Promise<boolean> => {
     if (!file.name.toLowerCase().endsWith('.pdf')) {
       return false;
     }
-    
+
     // Try to load the first page
     const fileUrl = URL.createObjectURL(file);
     const loadingTask = pdfjsLib.getDocument({
       url: fileUrl,
-      cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',
+      cMapUrl: PDF_CMAP_URL,
       cMapPacked: true,
       disableRange: false,
       disableStream: false,
       disableAutoFetch: false
     });
-    
+
     const pdfDocument = await loadingTask.promise;
-    
+
     // If we can get the first page, it's a valid PDF
     await pdfDocument.getPage(1);
-    
+
     // Clean up
     URL.revokeObjectURL(fileUrl);
-    
+
     return true;
   } catch (error) {
     console.error('Invalid PDF file:', error);

@@ -1,4 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
+import { DEFAULT_SHOP_TIMING, type ShopTiming } from './defaultShopHours'
+import { NOTIFICATION_ICON_URL } from './assetUrl'
 
 // ✅ YOUR ACTUAL SUPABASE CREDENTIALS - NOW CONNECTED!
 const supabaseUrl = 'https://nnqqdlrarfdjmyjsxxrw.supabase.co'
@@ -18,8 +20,12 @@ export interface Shop {
   google_maps_link?: string
   is_active?: boolean
   operating_hours?: any
+  desktop_live?: boolean
+  desktop_live_at?: string
   payment_info?: any
   business_details?: any
+  latitude?: number | null
+  longitude?: number | null
   created_at: string
   updated_at: string
 }
@@ -35,9 +41,11 @@ export interface PrintJob {
   print_type: string
   nup_pages: number
   nup_orientation: string
-  customer_name: string
+  customer_name?: string | null
   customer_email?: string
   customer_phone?: string
+  shop_order_number?: number | null
+  order_identification?: 'ON_PAGE' | 'SEPARATE_SLIP' | string | null
   total_cost: number
   payment_status: 'pending' | 'paid' | 'failed'
   job_status: 'pending' | 'printing' | 'completed' | 'cancelled'
@@ -45,6 +53,8 @@ export interface PrintJob {
   estimated_completion?: string
   created_at: string
   updated_at: string
+  processing_time_seconds?: number
+  completed_at?: string
 }
 
 export interface CostConfig {
@@ -80,7 +90,7 @@ export const createShop = async (shopData: Partial<Shop>) => {
     .insert(shopData)
     .select()
     .single()
-  
+
   return { data, error }
 }
 
@@ -90,7 +100,7 @@ export const getShop = async (shopId: string) => {
     .select('*')
     .eq('id', shopId)
     .single()
-  
+
   return { data, error }
 }
 
@@ -101,7 +111,7 @@ export const updateShop = async (shopId: string, updates: Partial<Shop>) => {
     .eq('id', shopId)
     .select()
     .single()
-  
+
   return { data, error }
 }
 
@@ -112,7 +122,7 @@ export const getShopByOwnerId = async (ownerId: string) => {
     .eq('owner_id', ownerId)
     .eq('is_active', true)
     .single()
-  
+
   return { data, error }
 }
 
@@ -122,8 +132,104 @@ export const getAllShops = async () => {
     .select('*')
     .eq('is_active', true)
     .order('created_at', { ascending: false })
-  
+
   return { data, error }
+}
+
+export interface LocalShopInfo {
+  name: string
+  address: string
+  phone: string
+  email: string
+  googleMapsLink: string
+  latitude: string
+  longitude: string
+  /** Public shop-page QR image URL (Supabase storage), when the shop has generated/uploaded one */
+  qr_code_url?: string
+}
+
+export function shopRowToLocalInfo(shop: Partial<Shop> & Record<string, unknown>): LocalShopInfo {
+  return {
+    name: String(shop.name || ''),
+    address: String(shop.address || ''),
+    phone: String(shop.phone || ''),
+    email: String(shop.email || ''),
+    googleMapsLink: String(shop.google_maps_link || ''),
+    latitude:
+      shop.latitude != null && shop.latitude !== ''
+        ? String(shop.latitude)
+        : '',
+    longitude:
+      shop.longitude != null && shop.longitude !== ''
+        ? String(shop.longitude)
+        : '',
+    qr_code_url:
+      shop.qr_code_url != null && String(shop.qr_code_url).trim() !== ''
+        ? String(shop.qr_code_url)
+        : undefined,
+  }
+}
+
+export interface StoredBusinessDetails {
+  businessType: string
+  gstNumber: string
+  panNumber: string
+  registrationNumber: string
+  ownerName: string
+  establishedYear: string
+  businessTypeOther?: string
+}
+
+export function businessDetailsFromDb(raw: unknown): StoredBusinessDetails {
+  const empty: StoredBusinessDetails = {
+    businessType: '',
+    gstNumber: '',
+    panNumber: '',
+    registrationNumber: '',
+    ownerName: '',
+    establishedYear: '',
+  }
+  if (!raw || typeof raw !== 'object') return empty
+  const record = raw as Record<string, unknown>
+  return {
+    ...empty,
+    businessType: String(record.businessType || ''),
+    ownerName: String(record.ownerName || ''),
+    gstNumber: String(record.gstNumber || ''),
+    panNumber: String(record.panNumber || ''),
+    registrationNumber: String(record.registrationNumber || ''),
+    establishedYear: String(record.establishedYear || ''),
+    ...(record.businessTypeOther
+      ? { businessTypeOther: String(record.businessTypeOther) }
+      : {}),
+  }
+}
+
+export function shopTimingFromDb(raw: unknown): ShopTiming {
+  if (raw && typeof raw === 'object' && 'monday' in (raw as object)) {
+    return raw as ShopTiming
+  }
+  return DEFAULT_SHOP_TIMING
+}
+
+export async function fetchShopSettingsFromDatabase(shopId: string) {
+  const { data, error } = await getShop(shopId)
+  if (error || !data) {
+    return { success: false as const, error: error?.message || 'Shop not found' }
+  }
+  return {
+    success: true as const,
+    shopInfo: shopRowToLocalInfo(data),
+    businessDetails: businessDetailsFromDb(data.business_details),
+    shopTiming: shopTimingFromDb(data.operating_hours),
+  }
+}
+
+/** @deprecated Use fetchShopSettingsFromDatabase */
+export async function fetchShopInfoFromDatabase(shopId: string) {
+  const result = await fetchShopSettingsFromDatabase(shopId)
+  if (!result.success) return result
+  return { success: true as const, shopInfo: result.shopInfo }
 }
 
 // ============================================================================
@@ -136,7 +242,7 @@ export const createPrintJob = async (jobData: Partial<PrintJob>) => {
     .insert(jobData)
     .select()
     .single()
-  
+
   return { data, error }
 }
 
@@ -145,8 +251,9 @@ export const getPrintJobs = async (shopId: string) => {
     .from('print_jobs')
     .select('*')
     .eq('shop_id', shopId)
+    .neq('file_url', '__uploading__')
     .order('created_at', { ascending: false })
-  
+
   return { data, error }
 }
 
@@ -157,7 +264,7 @@ export const updatePrintJob = async (jobId: string, updates: Partial<PrintJob>) 
     .eq('id', jobId)
     .select()
     .single()
-  
+
   return { data, error }
 }
 
@@ -167,7 +274,7 @@ export const getPrintJobById = async (jobId: string) => {
     .select('*')
     .eq('id', jobId)
     .single()
-  
+
   return { data, error }
 }
 
@@ -177,7 +284,7 @@ export const deletePrintJob = async (jobId: string) => {
     .from('print_jobs')
     .delete()
     .eq('id', jobId)
-  
+
   return { data, error }
 }
 
@@ -188,7 +295,7 @@ export const deletePrintJob = async (jobId: string) => {
 export const syncCostConfigs = async (shopId: string, configs: any[]) => {
   try {
     console.log('🔄 Starting cost config sync...', { shopId, configCount: configs.length })
-    
+
     // First, delete existing configs for this shop
     const { error: deleteError } = await supabase
       .from('cost_configs')
@@ -240,7 +347,7 @@ export const syncCostConfigs = async (shopId: string, configs: any[]) => {
         .from('cost_configs')
         .insert(configsToInsert)
         .select()
-      
+
       if (error) {
         console.error('❌ Error inserting new configs:', error)
         return { success: false, error: error.message }
@@ -260,13 +367,13 @@ export const syncCostConfigs = async (shopId: string, configs: any[]) => {
 
 export const getCostConfigs = async (shopId: string) => {
   console.log('📊 Fetching cost configs for shop:', shopId)
-  
+
   const { data, error } = await supabase
     .from('cost_configs')
     .select('*')
     .eq('shop_id', shopId)
     .eq('is_active', true)
-  
+
   if (error) {
     console.error('❌ Error fetching cost configs:', error)
   } else {
@@ -279,7 +386,7 @@ export const getCostConfigs = async (shopId: string) => {
       })
     })
   }
-  
+
   return { data, error }
 }
 
@@ -290,7 +397,7 @@ export const getCostConfigs = async (shopId: string) => {
 export const syncPrinterConfigs = async (shopId: string, configs: any[]) => {
   try {
     console.log('🔄 Starting printer config sync...', { shopId, configCount: configs.length })
-    
+
     // First, delete existing configs for this shop
     const { error: deleteError } = await supabase
       .from('printer_configs')
@@ -319,7 +426,7 @@ export const syncPrinterConfigs = async (shopId: string, configs: any[]) => {
         .from('printer_configs')
         .insert(configsToInsert)
         .select()
-      
+
       if (error) {
         console.error('❌ Error inserting new printer configs:', error)
         return { success: false, error: error.message }
@@ -339,19 +446,19 @@ export const syncPrinterConfigs = async (shopId: string, configs: any[]) => {
 
 export const getPrinterConfigs = async (shopId: string) => {
   console.log('🖨️ Fetching printer configs for shop:', shopId)
-  
+
   const { data, error } = await supabase
     .from('printer_configs')
     .select('*')
     .eq('shop_id', shopId)
     .eq('is_available', true)
-  
+
   if (error) {
     console.error('❌ Error fetching printer configs:', error)
   } else {
     console.log('✅ Printer configs fetched:', data?.length || 0, 'configs')
   }
-  
+
   return { data, error }
 }
 
@@ -362,17 +469,17 @@ export const getPrinterConfigs = async (shopId: string) => {
 export const syncPaymentInfo = async (shopId: string, paymentInfo: any) => {
   try {
     console.log('🔄 Syncing payment info to database...', { shopId, paymentInfo })
-    
+
     const { data, error } = await supabase
       .from('shops')
-      .update({ 
+      .update({
         payment_info: paymentInfo,
         updated_at: new Date().toISOString()
       })
       .eq('id', shopId)
       .select()
       .single()
-    
+
     if (error) {
       console.error('❌ Error syncing payment info:', error)
       return { success: false, error: error.message }
@@ -389,17 +496,17 @@ export const syncPaymentInfo = async (shopId: string, paymentInfo: any) => {
 export const syncBusinessDetails = async (shopId: string, businessDetails: any) => {
   try {
     console.log('🔄 Syncing business details to database...', { shopId, businessDetails })
-    
+
     const { data, error } = await supabase
       .from('shops')
-      .update({ 
+      .update({
         business_details: businessDetails,
         updated_at: new Date().toISOString()
       })
       .eq('id', shopId)
       .select()
       .single()
-    
+
     if (error) {
       console.error('❌ Error syncing business details:', error)
       return { success: false, error: error.message }
@@ -419,28 +526,28 @@ export const syncBusinessDetails = async (shopId: string, businessDetails: any) 
 
 export const subscribeToNewJobs = (shopId: string, callback: (job: PrintJob) => void) => {
   console.log('🔔 Setting up real-time subscription for shop:', shopId)
-  
+
   // Create a unique channel name to avoid conflicts
   const channelName = `print_jobs_${shopId}_${Date.now()}`
-  
+
   const channel = supabase
     .channel(channelName)
-    .on('postgres_changes', 
-      { 
-        event: 'INSERT', 
-        schema: 'public', 
+    .on('postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
         table: 'print_jobs',
         filter: `shop_id=eq.${shopId}`
-      }, 
+      },
       (payload) => {
         console.log('🔔 NEW PRINT JOB RECEIVED:', payload.new)
         callback(payload.new as PrintJob)
-        
+
         // Show desktop notification if available
         if ('Notification' in window && Notification.permission === 'granted') {
           new Notification('New Print Job!', {
-            body: `${payload.new.customer_name} ordered ${payload.new.copies} copies of ${payload.new.filename}`,
-            icon: '/icon.png'
+            body: `${payload.new.shop_order_number ? `ID - ${payload.new.shop_order_number}` : 'New order'} · ${payload.new.copies} copies of ${payload.new.filename}`,
+            icon: NOTIFICATION_ICON_URL
           })
         }
       }
@@ -463,16 +570,16 @@ export const subscribeToNewJobs = (shopId: string, callback: (job: PrintJob) => 
 
 export const subscribeToJobUpdates = (shopId: string, callback: (job: PrintJob) => void) => {
   const channelName = `job_updates_${shopId}_${Date.now()}`
-  
+
   return supabase
     .channel(channelName)
-    .on('postgres_changes', 
-      { 
-        event: 'UPDATE', 
-        schema: 'public', 
+    .on('postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
         table: 'print_jobs',
         filter: `shop_id=eq.${shopId}`
-      }, 
+      },
       (payload) => {
         console.log('📝 JOB STATUS UPDATED:', payload.new)
         callback(payload.new as PrintJob)
@@ -485,18 +592,25 @@ export const subscribeToJobUpdates = (shopId: string, callback: (job: PrintJob) 
 
 export const subscribeToAllJobChanges = (shopId: string, callback: (job: PrintJob, event: string) => void) => {
   const channelName = `all_job_changes_${shopId}_${Date.now()}`
-  
+
   return supabase
     .channel(channelName)
-    .on('postgres_changes', 
-      { 
-        event: '*', 
-        schema: 'public', 
+    .on('postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
         table: 'print_jobs',
         filter: `shop_id=eq.${shopId}`
-      }, 
+      },
       (payload) => {
         console.log('🔄 JOB CHANGE:', payload.eventType, payload.new)
+        
+        // Ignore incomplete uploads in real-time updates
+        if (payload.new && (payload.new as any).file_url === '__uploading__') {
+          console.log('⏳ Ignoring real-time update for incomplete upload');
+          return;
+        }
+
         callback(payload.new as PrintJob, payload.eventType)
       }
     )
@@ -511,20 +625,20 @@ export const subscribeToAllJobChanges = (shopId: string, callback: (job: PrintJo
 
 export const uploadFile = async (file: File, shopId: string) => {
   const fileName = `${shopId}/${Date.now()}_${file.name}`
-  
+
   const { data, error } = await supabase.storage
     .from('print-files')
     .upload(fileName, file)
-  
+
   if (error) {
     console.error('File upload error:', error)
     return { data: null, error }
   }
-  
+
   const { data: { publicUrl } } = supabase.storage
     .from('print-files')
     .getPublicUrl(fileName)
-  
+
   // 🚀 OPTIMIZATION: Start preloading PDF in background (non-blocking)
   // Upload completes immediately, PDF caches in background for faster subsequent views
   if (file.type === 'application/pdf' && publicUrl) {
@@ -535,7 +649,7 @@ export const uploadFile = async (file: File, shopId: string) => {
       console.warn('⚠️ Background preload failed:', err)
     })
   }
-  
+
   return { data: { path: data.path, publicUrl }, error: null }
 }
 
@@ -543,7 +657,7 @@ export const downloadFile = async (filePath: string) => {
   const { data, error } = await supabase.storage
     .from('print-files')
     .download(filePath)
-  
+
   return { data, error }
 }
 
@@ -551,7 +665,7 @@ export const getFileUrl = (filePath: string) => {
   const { data } = supabase.storage
     .from('print-files')
     .getPublicUrl(filePath)
-  
+
   return data.publicUrl
 }
 
@@ -566,52 +680,52 @@ export const calculateOrderCost = async (shopId: string, orderData: {
   copies: number
 }) => {
   const { data: configs, error } = await getCostConfigs(shopId)
-  
+
   if (error || !configs) {
     console.error('Error getting cost configs:', error)
     return { cost: 0, error, pricePerPage: 0, tier: null }
   }
-  
-  const matchingConfig = configs.find(config => 
+
+  const matchingConfig = configs.find(config =>
     config.paper_size === orderData.paperSize &&
     config.color_mode === orderData.colorMode &&
     config.print_type === orderData.printType
   )
-  
+
   if (!matchingConfig) {
-    return { 
-      cost: 0, 
-      error: 'No pricing configuration found for this combination', 
-      pricePerPage: 0, 
-      tier: null 
+    return {
+      cost: 0,
+      error: 'No pricing configuration found for this combination',
+      pricePerPage: 0,
+      tier: null
     }
   }
-  
+
   let pricePerPage = matchingConfig.base_price
   let appliedTier = null
-  
+
   // 🔥 FIXED: Check for bulk pricing tiers with proper structure
   if (matchingConfig.bulk_tiers && Array.isArray(matchingConfig.bulk_tiers) && matchingConfig.bulk_tiers.length > 0) {
     console.log('📊 Checking bulk tiers for', orderData.copies, 'copies:', matchingConfig.bulk_tiers)
-    
+
     const applicableTier = matchingConfig.bulk_tiers
       .filter((tier: any) => orderData.copies >= tier.minQuantity)
       .filter((tier: any) => tier.maxQuantity === null || orderData.copies <= tier.maxQuantity)
       .sort((a: any, b: any) => b.minQuantity - a.minQuantity)[0] // Get the highest applicable tier
-    
+
     if (applicableTier) {
       pricePerPage = applicableTier.pricePerPage
       appliedTier = applicableTier
       console.log('✅ Applied bulk tier:', applicableTier)
     }
   }
-  
+
   const totalCost = pricePerPage * orderData.copies
-  
-  return { 
-    cost: totalCost, 
-    error: null, 
-    pricePerPage, 
+
+  return {
+    cost: totalCost,
+    error: null,
+    pricePerPage,
     tier: appliedTier,
     basePrice: matchingConfig.base_price,
     savings: appliedTier ? (matchingConfig.base_price - pricePerPage) * orderData.copies : 0
@@ -625,17 +739,17 @@ export const calculateOrderCost = async (shopId: string, orderData: {
 export const testConnection = async () => {
   try {
     console.log('🔍 Testing Supabase connection...')
-    
+
     const { data, error } = await supabase
       .from('shops')
       .select('count')
       .limit(1)
-    
+
     if (error) {
       console.error('❌ Connection test failed:', error)
       return { success: false, error: error.message }
     }
-    
+
     console.log('✅ Supabase connection successful!')
     return { success: true, error: null }
   } catch (error) {
@@ -659,8 +773,8 @@ export const requestNotificationPermission = async () => {
 export const showNotification = (title: string, options?: NotificationOptions) => {
   if ('Notification' in window && Notification.permission === 'granted') {
     return new Notification(title, {
-      icon: '/icon.png',
-      badge: '/icon.png',
+      icon: NOTIFICATION_ICON_URL,
+      badge: NOTIFICATION_ICON_URL,
       ...options
     })
   }
@@ -674,10 +788,10 @@ export const showNotification = (title: string, options?: NotificationOptions) =
 export const createOrUpdateShopWithId = async (shopId: string, shopData: any, ownerId?: string) => {
   try {
     console.log('🏪 Creating/updating shop in database with ID:', shopId)
-    
+
     // First try to update existing shop
     const { data: existingShop } = await getShop(shopId)
-    
+
     const shopRecord = {
       id: shopId,
       name: shopData.name,
@@ -685,6 +799,13 @@ export const createOrUpdateShopWithId = async (shopId: string, shopData: any, ow
       phone: shopData.phone,
       email: shopData.email || null,
       google_maps_link: shopData.googleMapsLink || null,
+      latitude: shopData.latitude != null && shopData.latitude !== ''
+        ? parseFloat(String(shopData.latitude))
+        : null,
+      longitude: shopData.longitude != null && shopData.longitude !== ''
+        ? parseFloat(String(shopData.longitude))
+        : null,
+      business_details: shopData.businessDetails || undefined,
       owner_id: ownerId || null,
       is_active: true
     }
@@ -702,7 +823,7 @@ export const createOrUpdateShopWithId = async (shopId: string, shopData: any, ow
         .insert(shopRecord)
         .select()
         .single()
-      
+
       if (error) throw error
       console.log('✅ Shop created in database:', data)
       return { success: true, data }
@@ -717,9 +838,9 @@ export const createOrUpdateShopWithId = async (shopId: string, shopData: any, ow
 export const syncShopInfoToDatabase = async (shopId: string, shopInfo: any, ownerId?: string) => {
   try {
     console.log('🔄 Syncing shop info to database for shop:', shopId)
-    
+
     const result = await createOrUpdateShopWithId(shopId, shopInfo, ownerId)
-    
+
     if (result.success) {
       console.log('✅ Shop info synced to database successfully!')
       return { success: true, data: result.data }
@@ -737,17 +858,17 @@ export const syncShopInfoToDatabase = async (shopId: string, shopInfo: any, owne
 export const debugDatabaseContents = async () => {
   try {
     console.log('🔍 Checking database contents...')
-    
+
     const { data: shops, error } = await getAllShops()
-    
+
     if (error) {
       console.error('❌ Error fetching shops:', error)
       return
     }
-    
+
     console.log('📊 Shops in database:', shops)
     console.log('📊 Total shops found:', shops?.length || 0)
-    
+
     if (shops && shops.length > 0) {
       shops.forEach((shop, index) => {
         console.log(`🏪 Shop ${index + 1}:`, {
@@ -760,7 +881,7 @@ export const debugDatabaseContents = async () => {
     } else {
       console.log('❌ No shops found in database')
     }
-    
+
     return shops
   } catch (error) {
     console.error('❌ Error debugging database:', error)
@@ -771,47 +892,47 @@ export const debugDatabaseContents = async () => {
 export const forceSyncAllConfigurations = async (shopId: string) => {
   try {
     console.log('🔄 Force syncing ALL configurations for shop:', shopId)
-    
+
     // Get local configurations
     const costConfigs = JSON.parse(localStorage.getItem('cost-configs') || '[]')
     const printerConfigs = JSON.parse(localStorage.getItem('printer-configs') || '[]')
     const shopInfo = JSON.parse(localStorage.getItem('shop-info') || '{}')
     const paymentInfo = JSON.parse(localStorage.getItem('payment-info') || '{}')
     const businessDetails = JSON.parse(localStorage.getItem('business-details') || '{}')
-    
+
     console.log('📊 Local cost configs:', costConfigs.length)
     console.log('🖨️ Local printer configs:', printerConfigs.length)
-    
+
     // Sync shop info
     if (shopInfo.name) {
       const shopResult = await syncShopInfoToDatabase(shopId, shopInfo)
       console.log('🏪 Shop info sync result:', shopResult)
     }
-    
+
     // Sync cost configs
     if (costConfigs.length > 0) {
       const costResult = await syncCostConfigs(shopId, costConfigs)
       console.log('💰 Cost config sync result:', costResult)
     }
-    
+
     // Sync printer configs
     if (printerConfigs.length > 0) {
       const printerResult = await syncPrinterConfigs(shopId, printerConfigs)
       console.log('🖨️ Printer config sync result:', printerResult)
     }
-    
+
     // Sync payment info
     if (Object.keys(paymentInfo).length > 0) {
       const paymentResult = await syncPaymentInfo(shopId, paymentInfo)
       console.log('💳 Payment info sync result:', paymentResult)
     }
-    
+
     // Sync business details
     if (Object.keys(businessDetails).length > 0) {
       const businessResult = await syncBusinessDetails(shopId, businessDetails)
       console.log('🏢 Business details sync result:', businessResult)
     }
-    
+
     console.log('✅ Force sync completed!')
     return { success: true }
   } catch (error) {

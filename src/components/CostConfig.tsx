@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { PaperSize, CostConfigItem, CostTier } from '../types';
-import { Plus, Trash2, DollarSign, Calculator, AlertTriangle, TrendingUp, Target, CheckCircle, Edit3, Save, X, RefreshCw } from 'lucide-react';
+import { Plus, Trash2, IndianRupee, Calculator, AlertTriangle, TrendingUp, Target, CheckCircle, Edit3, Save, X, RefreshCw } from 'lucide-react';
 import { syncCostConfigs } from '../utils/supabase';
 
 interface CostConfigProps {
@@ -363,7 +363,7 @@ const CostConfig: React.FC<CostConfigProps> = ({
         <div className="flex items-center justify-between">
           <div className="flex items-center">
             <div className="w-12 h-12 bg-gradient-primary rounded-xl flex items-center justify-center shadow-large mr-4">
-              <DollarSign className="h-6 w-6 text-white" />
+              <IndianRupee className="h-6 w-6 text-white" />
             </div>
             <div>
               <h2 className="text-xl font-bold text-blue-800 dark:text-blue-300">Cost Configuration</h2>
@@ -819,7 +819,7 @@ const CostConfig: React.FC<CostConfigProps> = ({
           </div>
         ) : (
           <div className="text-center py-12">
-            <DollarSign className="h-16 w-16 text-gray-400 mx-auto mb-4" />
+            <IndianRupee className="h-16 w-16 text-gray-400 mx-auto mb-4" />
             <h4 className="text-lg font-bold text-gray-500 dark:text-gray-400 mb-3">No cost configurations set up yet</h4>
             <p className="text-gray-400 dark:text-gray-500 mb-6">Select a paper size, color mode, and print type above to get started</p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 max-w-lg mx-auto">

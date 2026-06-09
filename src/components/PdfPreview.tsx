@@ -1,18 +1,21 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { getPdfPageCount, getPdfPageViewport } from '../utils/pdfUtils';
+import { getPdfPageCount, getScaledPageDimensions } from '../utils/pdfUtils';
 import {
-  renderHighQualityPdfPage,
   renderNupPreview,
+  renderSinglePageOnPaper,
   applyGrayscaleFilter,
   calculateNupOptimalScale,
+  calculatePaperOptimalScale,
   drawSettingsIndicators,
   PAPER_SIZES,
   PaperSizeKey,
   calculateTotalSheets,
   getSheetStartPage,
   getSheetPages,
-  getSheetFromPage
+  getSheetFromPage,
+  calculateNupLayout
 } from '../utils/pdfTransformations';
+import { getCachedPrinters, getDefaultPrinter } from '../utils/printerCache';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Printer, Download, FileText, AlertTriangle, RefreshCw, Maximize, Minimize, Settings, X } from 'lucide-react';
 
 interface PdfPreviewProps {
@@ -24,6 +27,7 @@ interface PdfPreviewProps {
     print_type?: 'Single' | 'Double';
     pages_per_sheet?: number;
     nup_orientation?: 'portrait' | 'landscape';
+    margin?: 'off' | 'low' | 'normal';
   };
   onPrint?: (printOptions: {
     printerName: string;
@@ -35,9 +39,27 @@ interface PdfPreviewProps {
     nupOrientation: string;
   }) => Promise<void>;
   onClose?: () => void;
+  isProcessing?: boolean; // New prop to control external processing state
+  isDownloading?: boolean; // New prop for download state
+  downloadProgress?: number; // New prop for download progress
 }
 
-const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onClose }) => {
+const PdfPreview: React.FC<PdfPreviewProps> = ({
+  fileUrl,
+  jobData,
+  onPrint,
+  onClose,
+  isProcessing = false,
+  isDownloading = false,
+  downloadProgress = 0
+}) => {
+  const mountStart = performance.now();
+  // Use a ref to log only on mount, not every render
+  const isFirstRender = useRef(true);
+  if (isFirstRender.current) {
+    console.log(`⚡ [PERF] PdfPreview MOUNTING at ${mountStart.toFixed(2)}ms`);
+  }
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
@@ -57,6 +79,7 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
   const [loadingStatus, setLoadingStatus] = useState('Initializing...');
   const [isRendering, setIsRendering] = useState(false);
   const [isEnhancing, setIsEnhancing] = useState(false);
+  const [showEnhancingBadge, setShowEnhancingBadge] = useState(false); // New state for delayed badge
   const [error, setError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const maxRetries = 3;
@@ -69,9 +92,10 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
   const [printType, setPrintType] = useState<'Single' | 'Double'>(jobData?.print_type || 'Single');
   const [nupPages, setNupPages] = useState(jobData?.pages_per_sheet || 1);
   const [nupOrientation, setNupOrientation] = useState<'portrait' | 'landscape'>('landscape'); // Always landscape for N-up
-  
+  const [marginSetting, setMarginSetting] = useState<'off' | 'low' | 'normal'>(jobData?.margin || 'normal');
+
   // UI state
-  const [availablePrinters, setAvailablePrinters] = useState<Array<{name: string, status: string, default: boolean}>>([]);
+  const [availablePrinters, setAvailablePrinters] = useState<Array<{ name: string, status: string, default: boolean }>>([]);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
 
@@ -92,16 +116,35 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
 
   // Load PDF and printers on mount
   useEffect(() => {
-    loadPdf();
-    loadPrinters();
-  }, [fileUrl]);
+    const effectStart = performance.now();
+    if (isFirstRender.current) {
+      console.log(`⚡ [PERF] PdfPreview useEffect (Mount Done) at ${effectStart.toFixed(2)}ms (Render took: ${(effectStart - mountStart).toFixed(2)}ms)`);
+      isFirstRender.current = false;
+    }
+
+    loadPrinters(); // Always load printers
+
+    // Decouple PDF loading from mount to ensure instant modal appearance
+    if (!isProcessing) {
+      setTimeout(() => {
+        loadPdf();
+      }, 10);
+    }
+  }, [fileUrl, isProcessing]);
+
+  // Sync margin from parent prop when it changes
+  useEffect(() => {
+    if (jobData?.margin && jobData.margin !== marginSetting) {
+      setMarginSetting(jobData.margin);
+    }
+  }, [jobData?.margin]);
 
   // Re-render PDF when settings change - INSTANT for first page, minimal debounce for changes
   useEffect(() => {
-    if (canvasRef.current && !isLoading && !error && totalPages > 0) {
+    if (canvasRef.current && !isLoading && !error && totalPages > 0 && !isProcessing) {
       // Increment render version to invalidate any in-flight renders
       renderVersionRef.current += 1;
-      
+
       // Clear any pending timeouts
       if (renderTimeoutRef.current) {
         clearTimeout(renderTimeoutRef.current);
@@ -127,7 +170,7 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
     return () => {
       // Increment version to cancel any in-flight renders
       renderVersionRef.current += 1;
-      
+
       // Clear pending timeouts
       if (renderTimeoutRef.current) {
         clearTimeout(renderTimeoutRef.current);
@@ -140,16 +183,32 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
         setIsEnhancing(false);
       }
     };
-  }, [currentSheet, scale, isLoading, error, fileUrl, totalPages, colorMode, printType, nupPages, nupOrientation, paperSize, optimalScale]);
-
+  }, [currentSheet, scale, isLoading, error, fileUrl, totalPages, colorMode, printType, nupPages, nupOrientation, paperSize, optimalScale, isProcessing, marginSetting]);
   // Handle N-up mode change
   const handleNupChange = (newNupPages: number) => {
     setNupPages(newNupPages);
     setCurrentSheet(1); // Reset to first sheet when changing N-up mode
   };
 
+  // Effect to manage "Enhancing" badge delay
+  useEffect(() => {
+    let timeout: NodeJS.Timeout;
+    if (isEnhancing) {
+      // Only show badge if enhancing takes longer than 5 seconds
+      timeout = setTimeout(() => {
+        setShowEnhancingBadge(true);
+      }, 5000); // 5 second delay as requested
+    } else {
+      setShowEnhancingBadge(false);
+    }
+    return () => clearTimeout(timeout);
+  }, [isEnhancing]);
+
   // Render preview with all transformations applied
   const renderPreview = async (lowQuality: boolean = false, retryCount: number = 0) => {
+    const renderStartTime = performance.now();
+    console.log('⏱️ [RENDER TIMING] renderPreview() started:', lowQuality ? 'LOW QUALITY' : 'HIGH QUALITY');
+
     if (!canvasRef.current) {
       console.warn('⚠️ Canvas ref not available');
       return;
@@ -167,14 +226,14 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
     const myVersion = renderVersionRef.current;
 
     renderLockRef.current = true;
-    
+
     // CRITICAL: Check version immediately after acquiring lock, before any work
     if (myVersion !== renderVersionRef.current) {
       console.log('🚫 Render superseded immediately after acquiring lock');
       renderLockRef.current = false;
       return;
     }
-    
+
     if (lowQuality) {
       setIsRendering(true);
     } else {
@@ -183,168 +242,137 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
     setError(null);
 
     try {
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d', { 
-        alpha: false,  // No transparency for better performance
-        willReadFrequently: false 
-      });
+      // 1. Calculate and set CSS dimensions explicitly (Fixes "Small -> Big" jump)
+      // We always set layout to the TARGET scale, not the render scale
+      // This ensures the box size is stable even if we render a low-res bitmap
+      let cssWidth = 0;
+      let cssHeight = 0;
 
-      if (!ctx) {
-        throw new Error('Failed to get canvas context');
+      if (nupPages > 1) {
+        const layout = calculateNupLayout(paperSize as PaperSizeKey, nupPages, 'landscape');
+        cssWidth = layout.paperWidth * scale; // Use state 'scale', not 'renderScale'
+        cssHeight = layout.paperHeight * scale;
+      } else {
+        // For single page, use PAPER dimensions (not PDF page dimensions)
+        // This shows how content will fit on the selected paper
+        const paper = PAPER_SIZES[paperSize as PaperSizeKey];
+        if (paper) {
+          cssWidth = paper.width * scale;
+          cssHeight = paper.height * scale;
+        } else {
+          // Fallback to PDF dimensions if paper size unknown
+          const dims = await getScaledPageDimensions(fileUrl, currentSheet, scale);
+          cssWidth = dims.width;
+          cssHeight = dims.height;
+        }
       }
 
-      // Use lower quality for initial render, full quality for enhancement
-      const renderScale = lowQuality ? scale * 0.4 : scale;
+      // Check version before DOM update
+      if (myVersion !== renderVersionRef.current) { renderLockRef.current = false; return; }
+
+      // Apply consistent CSS sizing BEFORE rendering
+      if (canvasRef.current) {
+        canvasRef.current.style.width = `${cssWidth}px`;
+        canvasRef.current.style.height = `${cssHeight}px`;
+      }
+
+      // 2. Double Buffering: Render to Offscreen Canvas (Fixes "White Flash")
+      const offscreenCanvas = document.createElement('canvas');
+      // For high quality single page, viewport handles sizing
+      // For N-up, renderNupPreview handles sizing based on logic
+
+      const renderScale = lowQuality ? scale * 0.4 : scale; // Low quality bitmap scale
       const renderQuality = lowQuality ? 0.5 : (window.devicePixelRatio || 1);
 
-      console.log('🎨 Rendering preview:', {
+      console.log('🎨 Rendering to offscreen buffer:', {
         sheet: currentSheet,
-        totalPages,
-        totalSheets,
-        nupPages,
         scale: renderScale.toFixed(2),
-        quality: lowQuality ? 'low' : 'high'
+        quality: lowQuality ? 'low' : 'high',
+        cssSize: `${Math.round(cssWidth)}x${Math.round(cssHeight)}`
       });
 
-      // Checkpoint 2: Check version before sheet validation
-      if (myVersion !== renderVersionRef.current) {
-        console.log('🚫 Render superseded before validation');
-        renderLockRef.current = false;
-        setIsRendering(false);
-        setIsEnhancing(false);
-        return;
-      }
-
-      // Validate sheet number
-      if (currentSheet < 1 || currentSheet > totalSheets) {
-        console.warn(`⚠️ Invalid sheet: ${currentSheet}/${totalSheets}`);
-        renderLockRef.current = false;
-        setIsRendering(false);
-        setIsEnhancing(false);
-        return;
-      }
-
-      // Check if this render has been superseded
-      if (myVersion !== renderVersionRef.current) {
-        console.log('🚫 Render superseded, aborting');
-        renderLockRef.current = false;
-        setIsRendering(false);
-        setIsEnhancing(false);
-        return;
-      }
-
-      // CRITICAL FIX: Complete canvas reset for clean rendering
-      // 1. Save current context state
-      ctx.save();
-      
-      // 2. Reset transform matrix to identity
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      
-      // 3. Fill with white background (ensures no transparency artifacts)
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      // Render based on N-up setting
       if (nupPages > 1) {
-        const pagesToShow = getSheetPages(currentSheet, nupPages, totalPages);
-        console.log(`📑 Rendering sheet ${currentSheet} with pages:`, pagesToShow);
-
         await renderNupPreview(
           fileUrl,
           currentSheet,
-          canvas,
+          offscreenCanvas,
           paperSize as PaperSizeKey,
           nupPages,
           'landscape',
           renderScale,
-          totalPages
+          totalPages,
+          true // preventStyleResize: TRUE - we handle style manually above
         );
-        
-        // Check version immediately after async rendering
-        if (myVersion !== renderVersionRef.current) {
-          console.log('🚫 Render became stale during N-up drawing, aborting');
-          renderLockRef.current = false;
-          setIsRendering(false);
-          setIsEnhancing(false);
-          return;
-        }
       } else {
-        console.log(`📄 Rendering single page ${currentSheet}`);
-        // Render single page
-        await renderHighQualityPdfPage(
+        // Render single page fitted onto paper-sized canvas
+        const marginFactor = marginSetting === 'off' ? 1.0 : marginSetting === 'low' ? 0.97 : 0.92;
+        await renderSinglePageOnPaper(
           fileUrl,
           currentSheet,
-          canvas,
+          offscreenCanvas,
+          paperSize as PaperSizeKey,
           renderScale,
-          renderQuality
+          renderQuality,
+          true, // preventStyleResize: TRUE
+          marginFactor
         );
-        
-        // Check version immediately after async rendering
-        if (myVersion !== renderVersionRef.current) {
-          console.log('🚫 Render became stale during single page drawing, aborting');
-          renderLockRef.current = false;
-          setIsRendering(false);
-          setIsEnhancing(false);
-          return;
-        }
       }
 
-      // Restore context state
-      ctx.restore();
-
-      // CRITICAL: Final version check before applying filters and committing
+      // 3. Commit Offscreen Buffer to Main Canvas (Atomic Update)
       if (myVersion !== renderVersionRef.current) {
-        console.log('🚫 Render became stale after drawing, aborting before filters');
+        console.log('🚫 Render became stale during offscreen drawing, aborting commit');
         renderLockRef.current = false;
         setIsRendering(false);
         setIsEnhancing(false);
         return;
       }
 
-      // Apply grayscale filter if B&W mode
-      if (colorMode === 'BW') {
-        console.log('🎨 Applying B&W filter');
-        applyGrayscaleFilter(canvas);
+      const ctx = canvasRef.current.getContext('2d', { alpha: false });
+      if (ctx) {
+        // Resize main canvas to match offscreen buffer (bitmap size)
+        // Note: CSS size is already set and stable
+        canvasRef.current.width = offscreenCanvas.width;
+        canvasRef.current.height = offscreenCanvas.height;
+
+        // Draw content instantly
+        ctx.drawImage(offscreenCanvas, 0, 0);
       }
 
+      // 4. Apply filters (if any) to MAIN canvas
+      if (colorMode === 'BW') {
+        applyGrayscaleFilter(canvasRef.current);
+      }
+
+      const renderEndTime = performance.now();
       console.log('✅ Preview rendered successfully');
-      setRetryCount(0); // Reset retry count on success
-      
+      setRetryCount(0);
+
       // If this was low quality render, schedule high quality enhancement
       if (lowQuality) {
         setIsRendering(false);
-        // Schedule enhancement with version check
         enhancementTimeoutRef.current = setTimeout(() => {
-          // Check if this render is still current
           if (myVersion === renderVersionRef.current && renderLockRef.current && enhancementTimeoutRef.current) {
             enhancementTimeoutRef.current = null;
-            // Release lock so high quality render can proceed
             renderLockRef.current = false;
-            renderPreview(false); // Render high quality version
+            renderPreview(false); // Render high quality
           } else {
-            console.log('🚫 Enhancement cancelled (render superseded)');
             renderLockRef.current = false;
           }
         }, 50);
-        return; // Return early, lock will be released by timeout or cancelled by cleanup
+        return;
       }
     } catch (err) {
       console.error('❌ Error rendering preview:', err);
       const errorMessage = err instanceof Error ? err.message : 'Unknown error';
       setError(`Failed to render PDF preview: ${errorMessage}`);
 
-      // Retry logic with faster recovery
       if (retryCount < maxRetries) {
-        console.log(`Retrying... (${retryCount + 1}/${maxRetries})`);
         setRetryCount(prev => prev + 1);
-        renderLockRef.current = false; // Release lock before retry
-        setTimeout(() => renderPreview(lowQuality), 200); // Reduced from 500ms to 200ms
+        renderLockRef.current = false;
+        setTimeout(() => renderPreview(lowQuality, retryCount + 1), 200);
       }
     } finally {
-      // Only release lock and clear states if not low quality (which returns early)
       if (!lowQuality) {
-        // Always clear states and release lock, even for stale renders
-        // This prevents stuck UI indicators
         setIsRendering(false);
         setIsEnhancing(false);
         renderLockRef.current = false;
@@ -375,11 +403,12 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
                 containerHeight
               );
             } else {
-              const { optimalScale: calcScale, pageWidth: newPageWidth, pageHeight: newPageHeight } =
-                await getPdfPageViewport(fileUrl, currentPage, containerWidth, containerHeight);
-              newOptimalScale = calcScale;
-              setPageWidth(newPageWidth);
-              setPageHeight(newPageHeight);
+              // Use paper dimensions for optimal scale calculation
+              newOptimalScale = calculatePaperOptimalScale(
+                paperSize as PaperSizeKey,
+                containerWidth,
+                containerHeight
+              );
             }
 
             setOptimalScale(newOptimalScale);
@@ -410,6 +439,9 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
   }, [currentPage, isLoading, error, fileUrl, totalPages, nupPages, nupOrientation, paperSize]);
 
   // Handle fullscreen toggle
+  const [containerDims, setContainerDims] = useState<{ width: number; height: number } | null>(null);
+  const [isLayoutReady, setIsLayoutReady] = useState(false);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isFullscreen) {
@@ -420,53 +452,143 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
     document.addEventListener('keydown', handleKeyDown);
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
+      setIsLayoutReady(false); // Reset on unmount
     };
   }, [isFullscreen]);
 
+  // NEW: Robust ResizeObserver for container
+  // This replaces window.resize listeners and manual bounding client rect checks
+  // It ensures we only calculate scale when the container is TRULY ready and sized
+  useEffect(() => {
+    if (!viewerRef.current) return;
+
+    // Disconnect any previous observer if it exists (cleanup handled by return)
+    const observer = new ResizeObserver((entries) => {
+      // Use requestAnimationFrame to throttle and avoid "ResizeObserver loop limit exceeded"
+      window.requestAnimationFrame(() => {
+        if (!entries.length) return;
+
+        const entry = entries[0];
+        const { width, height } = entry.contentRect;
+
+        // Only update if dimensions are valid and changed meaningfully (>1px)
+        if (width > 0 && height > 0) {
+          setContainerDims(prev => {
+            if (!prev || Math.abs(prev.width - width) > 1 || Math.abs(prev.height - height) > 1) {
+              console.log('📏 Container resized:', Math.round(width), 'x', Math.round(height));
+              return { width, height };
+            }
+            return prev;
+          });
+        }
+      });
+    });
+
+    observer.observe(viewerRef.current);
+    return () => observer.disconnect();
+  }, []); // Empty dependency array = setup once on mount
+
+  // Recalculate scale whenever container dimensions change
+  useEffect(() => {
+    if (!containerDims || !fileUrl) return;
+
+    const calculateScale = async () => {
+      // Reset layout readiness to ensure smooth entry animation
+      setIsLayoutReady(false);
+
+      // Don't modify scale if user is manually zooming (optional check, but safer to respect "Fit" logic initially)
+      // For now, we enforce "Fit" on resize as per standard PDF viewers
+
+      let newOptimalScale = 1.0;
+      const { width: containerWidth, height: containerHeight } = containerDims;
+
+      // Account for padding
+      const effectiveWidth = containerWidth - 32;
+      const effectiveHeight = containerHeight - 32;
+
+      if (effectiveWidth <= 0 || effectiveHeight <= 0) return;
+
+      try {
+        // Same logic as before, but triggered by reliable observer
+        if (nupPages > 1) {
+          newOptimalScale = calculateNupOptimalScale(
+            paperSize as PaperSizeKey,
+            nupPages,
+            'landscape',
+            effectiveWidth,
+            effectiveHeight
+          );
+        } else {
+          // Use paper dimensions for scale calculation
+          newOptimalScale = calculatePaperOptimalScale(
+            paperSize as PaperSizeKey,
+            effectiveWidth,
+            effectiveHeight
+          );
+        }
+
+        console.log('📐 Updating scale to fit:', newOptimalScale.toFixed(3));
+        setScale(newOptimalScale);
+
+        // Mark layout as ready - this reveals the canvas
+        // Double RAF + Timeout guarantees the browser paints "opacity-0" state first
+        // and adds a slight delay so the animation is perceptible
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            setTimeout(() => {
+              setIsLayoutReady(true);
+            }, 100);
+          });
+        });
+
+      } catch (e) {
+        console.warn('Silent scale calc error:', e);
+      }
+    };
+
+    calculateScale();
+  }, [containerDims, fileUrl, nupPages, paperSize]);
+
+
   const loadPdf = async () => {
+    const loadStartTime = performance.now();
+    console.log('⏱️ [PDF TIMING] loadPdf() started at:', new Date().toISOString());
+    console.log('⏱️ [PDF TIMING] File URL length:', fileUrl.length);
+
     try {
       setIsLoading(true);
       setError(null);
       setLoadingStatus('Loading PDF...');
 
-      console.log(`📄 Loading PDF (attempt ${retryCount + 1}/${maxRetries + 1}):`, fileUrl);
+      console.log(`📄 Loading PDF (attempt ${retryCount + 1}/${maxRetries + 1})...`);
 
-      // Get total pages (this triggers the download)
-      setLoadingStatus('Processing document...');
-      const pageCount = await getPdfPageCount(fileUrl);
+      // Get total pages (this triggers the download) with progress tracking
+      const downloadStartTime = performance.now();
+      console.log('⏱️ [PDF TIMING] Download started at +', (downloadStartTime - loadStartTime).toFixed(2), 'ms');
+      setLoadingStatus('Downloading PDF...');
+      const pageCount = await getPdfPageCount(fileUrl, (loaded, total) => {
+        const percent = Math.round((loaded / total) * 100);
+        setLoadingStatus(`Loading... ${percent}%`);
+      });
+      const downloadEndTime = performance.now();
       console.log(`📄 PDF loaded: ${pageCount} pages`);
+      console.log('⏱️ [PDF TIMING] Download completed at +', (downloadEndTime - loadStartTime).toFixed(2), 'ms');
+      console.log('⏱️ [PDF TIMING] Download duration:', (downloadEndTime - downloadStartTime).toFixed(2), 'ms');
 
-      // CRITICAL FIX: Calculate optimal scale BEFORE triggering render
-      // This ensures first render uses correct scale, preventing double-render bug
-      if (viewerRef.current && pageCount > 0) {
-        setLoadingStatus('Preparing preview...');
-        const containerRect = viewerRef.current.getBoundingClientRect();
-        const containerWidth = containerRect.width - 32;
-        const containerHeight = containerRect.height - 32;
+      // Note: We NO LONGER calculate scale here manually.
+      // We rely on setContainerDims / useEffect to trigger it once layout is stable.
+      // This prevents the race condition.
 
-        if (containerWidth > 0 && containerHeight > 0) {
-          console.log('📐 Calculating optimal scale immediately...');
-          
-          // Calculate for first page
-          const { optimalScale: calcScale, pageWidth: newPageWidth, pageHeight: newPageHeight } =
-            await getPdfPageViewport(fileUrl, 1, containerWidth, containerHeight);
-          
-          console.log('✅ Optimal scale calculated:', calcScale.toFixed(3));
-          
-          // Set everything at once to prevent intermediate renders
-          setPageWidth(newPageWidth);
-          setPageHeight(newPageHeight);
-          setOptimalScale(calcScale);
-          setScale(calcScale);
-        }
-      }
-
-      // Now set state - render will use correct scale immediately
       setTotalPages(pageCount);
       setCurrentSheet(1);
       setIsLoading(false);
+
+      const loadEndTime = performance.now();
+      console.log('⏱️ [PDF TIMING] loadPdf() completed at +', (loadEndTime - loadStartTime).toFixed(2), 'ms');
+      console.log('⏱️ [PDF TIMING] Total load time:', (loadEndTime - loadStartTime).toFixed(2), 'ms');
     } catch (err) {
       console.error(`❌ Error loading PDF (attempt ${retryCount + 1}/${maxRetries + 1}):`, err);
+      console.log('⏱️ [PDF TIMING] loadPdf() ERROR at +', (performance.now() - loadStartTime).toFixed(2), 'ms');
 
       if (retryCount < maxRetries) {
         console.log(`🔄 Retrying... (${retryCount + 1}/${maxRetries})`);
@@ -482,28 +604,23 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
   };
 
   const loadPrinters = async () => {
-    if (window.electron) {
-      try {
-        console.log('🖨️ Loading available printers...');
-        const result = await window.electron.getPrinters();
-        
-        if (result.success && result.printers) {
-          setAvailablePrinters(result.printers);
-          console.log('🖨️ Available printers:', result.printers);
-          
-          // Set default printer
-          const defaultPrinter = result.printers.find(p => p.default);
-          if (defaultPrinter) {
-            setPrinterName(defaultPrinter.name);
-            console.log('🖨️ Default printer set to:', defaultPrinter.name);
-          } else if (result.printers.length > 0) {
-            setPrinterName(result.printers[0].name);
-            console.log('🖨️ First printer set to:', result.printers[0].name);
-          }
+    try {
+      console.log('🖨️ Loading printers from cache...');
+      const printers = await getCachedPrinters();
+
+      if (printers && printers.length > 0) {
+        setAvailablePrinters(printers);
+        console.log('🖨️ Cached printers loaded:', printers.length);
+
+        // Set default printer
+        const defaultPrinter = await getDefaultPrinter();
+        if (defaultPrinter) {
+          setPrinterName(defaultPrinter.name);
+          console.log('🖨️ Default printer set to:', defaultPrinter.name);
         }
-      } catch (error) {
-        console.error('❌ Error loading printers:', error);
       }
+    } catch (error) {
+      console.error('❌ Error loading cached printers:', error);
     }
   };
 
@@ -524,7 +641,7 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
   const handleZoomIn = () => {
     setScale(prevScale => {
       // Use larger steps for better zoom control
-      const newScale = Math.min(prevScale * 1.25, 3.0);
+      const newScale = Math.min(prevScale * 1.25, 5.0);
       console.log('🔍 Zoom In - Scale changed to:', newScale.toFixed(3), `(${Math.round(newScale * 100)}%)`);
       return newScale;
     });
@@ -623,17 +740,16 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
 
 
   return (
-    <div 
-      className={`bg-white dark:bg-gray-800 rounded-lg shadow-lg flex flex-col ${
-        isFullscreen ? 'fixed inset-0 z-50' : 'h-[80vh]'
-      }`}
+    <div
+      className={`bg-white dark:bg-gray-800 rounded-lg shadow-lg flex flex-col ${isFullscreen ? 'fixed inset-0 z-50' : 'h-[80vh]'
+        }`}
       ref={containerRef}
     >
       {/* SIMPLIFIED Header with essential controls only */}
       <div className="flex justify-between items-center py-3 px-4 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-t-lg flex-shrink-0">
         <div className="flex items-center space-x-3">
           <h3 className="text-lg font-bold text-gray-900 dark:text-white">PDF Preview</h3>
-          
+
           {/* Page navigation */}
           <div className="flex items-center space-x-2">
             <button
@@ -665,7 +781,7 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
             </button>
           </div>
         </div>
-        
+
         {/* Right side controls */}
         <div className="flex items-center space-x-2">
           {/* Zoom controls */}
@@ -694,11 +810,10 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
                 <button
                   key={level}
                   onClick={() => setZoomLevel(level)}
-                  className={`w-full px-4 py-2 text-sm text-left hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors ${
-                    Math.round((scale / optimalScale) * 100) === level
-                      ? 'text-blue-600 dark:text-blue-400 font-medium'
-                      : 'text-gray-700 dark:text-gray-300'
-                  }`}
+                  className={`w-full px-4 py-2 text-sm text-left hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors ${Math.round((scale / optimalScale) * 100) === level
+                    ? 'text-blue-600 dark:text-blue-400 font-medium'
+                    : 'text-gray-700 dark:text-gray-300'
+                    }`}
                 >
                   {level}%
                 </button>
@@ -714,19 +829,19 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
           >
             <ZoomIn className="h-4 w-4 text-gray-700 dark:text-gray-300" />
           </button>
-          
+
           {/* Action buttons */}
           <button
             onClick={toggleFullscreen}
             className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
             title={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
           >
-            {isFullscreen ? 
-              <Minimize className="h-4 w-4 text-gray-700 dark:text-gray-300" /> : 
+            {isFullscreen ?
+              <Minimize className="h-4 w-4 text-gray-700 dark:text-gray-300" /> :
               <Maximize className="h-4 w-4 text-gray-700 dark:text-gray-300" />
             }
           </button>
-          
+
           <button
             onClick={handleDownload}
             className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
@@ -734,7 +849,7 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
           >
             <Download className="h-4 w-4 text-gray-700 dark:text-gray-300" />
           </button>
-          
+
           {/* Close button */}
           {onClose && (
             <button
@@ -760,7 +875,7 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
             <div className="absolute inset-0 flex items-center justify-center bg-white dark:bg-gray-800 z-20">
               <div className="flex flex-col items-center">
                 <div className="w-16 h-16 border-4 border-blue-200 dark:border-blue-800 border-t-blue-600 rounded-full animate-spin mb-4"></div>
-                <p className="text-gray-600 dark:text-gray-400 text-lg font-medium">{loadingStatus}</p>
+                <p className="text-gray-600 dark:text-gray-400 text-lg font-medium">Loading PDF...</p>
               </div>
             </div>
           )}
@@ -774,7 +889,7 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
                 </div>
                 <h3 className="text-lg font-medium text-red-600 dark:text-red-400 mb-2">Error Loading PDF</h3>
                 <p className="text-gray-600 dark:text-gray-400 text-center mb-4">{error}</p>
-                <button 
+                <button
                   onClick={handleRetry}
                   className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center"
                 >
@@ -785,36 +900,86 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
             </div>
           )}
 
-          {/* Rendering overlay - shown while initial render (low quality phase) */}
-          {isRendering && !isLoading && !error && (
-            <div className="absolute inset-0 flex items-center justify-center bg-gray-900/10 dark:bg-gray-900/30 z-10">
-              <div className="bg-white dark:bg-gray-800 px-4 py-2 rounded-lg shadow-lg flex items-center">
-                <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mr-2"></div>
-                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Loading preview...</span>
+          {/* Processing overlay - shown when edits are being applied */}
+          {isProcessing && (
+            <div className="absolute inset-0 flex items-center justify-center bg-white dark:bg-gray-800 z-30">
+              <div className="flex flex-col items-center">
+                <div className="w-16 h-16 border-4 border-blue-200 dark:border-blue-800 border-t-blue-600 rounded-full animate-spin mb-4"></div>
+                <p className="text-gray-600 dark:text-gray-400 text-lg font-medium">Applying edits...</p>
               </div>
             </div>
           )}
-          
-          {/* Subtle enhancing indicator - shown during quality upgrade (no overlay, just corner badge) */}
-          {isEnhancing && !isLoading && !error && !isRendering && (
-            <div className="absolute top-2 right-2 bg-blue-600 text-white px-2 py-1 rounded text-xs font-medium z-10 flex items-center">
-              <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin mr-1"></div>
-              Enhancing...
+
+          {/* Rendering overlay - shown while initial render (low quality phase) */}
+          {/* Also shown while waiting for Layout to be ready (fixes "Jump" glitch) */}
+          {((isRendering && !isLoading && !error && !isProcessing) || (!isLayoutReady && !isLoading && !error)) && (
+            <div className="absolute inset-0 flex items-center justify-center bg-gray-900/10 dark:bg-gray-900/30 z-10">
+              <div className="bg-white dark:bg-gray-800 px-4 py-2 rounded-lg shadow-lg flex items-center">
+                <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mr-2"></div>
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {!isLayoutReady ? 'Preparing layout...' : 'Loading preview...'}
+                </span>
+              </div>
             </div>
           )}
 
-          <div className="shadow-xl bg-white rounded-lg overflow-hidden relative">
+          {/* Processing overlay - shown when edits are being applied */}
+          {isProcessing && (
+            <div className="absolute inset-0 flex items-center justify-center bg-white dark:bg-gray-800 z-30">
+              <div className="flex flex-col items-center">
+                <div className="w-16 h-16 border-4 border-blue-200 dark:border-blue-800 border-t-blue-600 rounded-full animate-spin mb-4"></div>
+                <p className="text-gray-600 dark:text-gray-400 text-lg font-medium">Applying edits...</p>
+              </div>
+            </div>
+          )}
+
+          {/* Download overlay - shown when file is downloading */}
+          {isDownloading && (
+            <div className="absolute inset-0 flex items-center justify-center bg-white dark:bg-gray-800 z-30">
+              <div className="flex flex-col items-center max-w-xs w-full px-6">
+                <div className="w-16 h-16 border-4 border-blue-200 dark:border-blue-800 border-t-blue-600 rounded-full animate-spin mb-4"></div>
+                <p className="text-gray-900 dark:text-white text-lg font-medium mb-2">Downloading file...</p>
+                <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5 mb-1">
+                  <div className="bg-blue-600 h-2.5 rounded-full transition-all duration-300" style={{ width: `${downloadProgress}%` }}></div>
+                </div>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{Math.round(downloadProgress)}% complete</p>
+              </div>
+            </div>
+          )}
+
+          {/* Enhancing indicator - Top Right - ANIMATED AS REQUESTED */}
+          {showEnhancingBadge && !isLoading && !error && !isRendering && !isProcessing && (
+            <>
+              <div className="absolute top-4 right-4 z-20 animate-fade-in-down">
+                <div className="bg-blue-600 text-white px-3 py-1.5 rounded-full shadow-lg flex items-center space-x-2">
+                  <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  <span className="text-xs font-bold tracking-wide">ENHANCING...</span>
+                </div>
+              </div>
+
+              {/* Low Quality Warning - Bottom Center - TRANSPARENT OVERLAY AS REQUESTED */}
+              <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-20 animate-fade-in-up">
+                <div className="bg-black/50 backdrop-blur-sm text-white px-4 py-2 rounded-full shadow-md border border-white/20">
+                  <p className="text-xs font-medium">To ensure fast loading, initial quality is reduced</p>
+                </div>
+              </div>
+            </>
+          )}
+
+          <div
+            className={`shadow-xl bg-white rounded-lg overflow-hidden relative transition-all duration-700 ease-[cubic-bezier(0.25,1,0.5,1)] transform ${isLayoutReady ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-8 scale-95'}`}
+          >
             <canvas ref={canvasRef} className="block" />
           </div>
         </div>
-        
+
         {/* SIMPLIFIED Print Settings Panel - Right sidebar */}
         <div className="w-80 border-l border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 flex-shrink-0 overflow-y-auto">
           <h4 className="text-lg font-bold text-gray-900 dark:text-white mb-4 flex items-center">
             <Printer className="h-5 w-5 mr-2" />
             Print Settings
           </h4>
-          
+
           <div className="space-y-4">
             {/* Printer Selection */}
             <div className="space-y-2">
@@ -861,21 +1026,19 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
               <div className="grid grid-cols-2 gap-2">
                 <button
                   onClick={() => handleNupChange(1)}
-                  className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
-                    nupPages === 1
-                      ? 'bg-blue-600 text-white border-blue-600'
-                      : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
-                  }`}
+                  className={`px-3 py-2 text-sm rounded-lg border transition-colors ${nupPages === 1
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
+                    }`}
                 >
                   Normal
                 </button>
                 <button
                   onClick={() => handleNupChange(2)}
-                  className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
-                    nupPages === 2
-                      ? 'bg-blue-600 text-white border-blue-600'
-                      : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
-                  }`}
+                  className={`px-3 py-2 text-sm rounded-lg border transition-colors ${nupPages === 2
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
+                    }`}
                 >
                   2-up
                 </button>
@@ -913,21 +1076,19 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
               <div className="grid grid-cols-2 gap-2">
                 <button
                   onClick={() => setColorMode('BW')}
-                  className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
-                    colorMode === 'BW'
-                      ? 'bg-gray-600 text-white border-gray-600'
-                      : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
-                  }`}
+                  className={`px-3 py-2 text-sm rounded-lg border transition-colors ${colorMode === 'BW'
+                    ? 'bg-gray-600 text-white border-gray-600'
+                    : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
+                    }`}
                 >
                   B&W
                 </button>
                 <button
                   onClick={() => setColorMode('Color')}
-                  className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
-                    colorMode === 'Color'
-                      ? 'bg-blue-600 text-white border-blue-600'
-                      : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
-                  }`}
+                  className={`px-3 py-2 text-sm rounded-lg border transition-colors ${colorMode === 'Color'
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
+                    }`}
                 >
                   Color
                 </button>
@@ -942,21 +1103,19 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
               <div className="grid grid-cols-2 gap-2">
                 <button
                   onClick={() => setPrintType('Single')}
-                  className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
-                    printType === 'Single'
-                      ? 'bg-blue-600 text-white border-blue-600'
-                      : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
-                  }`}
+                  className={`px-3 py-2 text-sm rounded-lg border transition-colors ${printType === 'Single'
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
+                    }`}
                 >
                   Single
                 </button>
                 <button
                   onClick={() => setPrintType('Double')}
-                  className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
-                    printType === 'Double'
-                      ? 'bg-blue-600 text-white border-blue-600'
-                      : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
-                  }`}
+                  className={`px-3 py-2 text-sm rounded-lg border transition-colors ${printType === 'Double'
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
+                    }`}
                 >
                   Double
                 </button>
@@ -983,7 +1142,7 @@ const PdfPreview: React.FC<PdfPreviewProps> = ({ fileUrl, jobData, onPrint, onCl
                 )}
               </button>
             )}
-            
+
             {!printerName && (
               <div className="mt-3 p-3 bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg">
                 <div className="flex items-center text-yellow-800 dark:text-yellow-300">

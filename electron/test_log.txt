@@ -1,0 +1,8 @@
+--- Test Start ---
+🧪 Starting Recipe Test...
+📄 Created dummy PDF, size: 860
+🍳 Applying STRINGIFIED recipe: {"pages":[{"pageNumber":1,"hasEdits":true,"transforms":{"rotation":90,"scale":100,"crop":{"x":0.25,"y":0.25,"width":0.5,"height":0.5}}}]}
+✅ Process complete. Original size: 860, Processed size: 979
+🎉 Output changed (good sign that something happened)
+💾 Saved output to C:\Users\pro35\Downloads\desktop-app-3 3\desktop-app-3\electron\test_output.pdf
+📂 Output file stats: size=979

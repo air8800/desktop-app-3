@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { PrintJob } from '../types';
-import { Files, Printer, DollarSign, Clock, X, TrendingUp, Calendar } from 'lucide-react';
+import { Files, Printer, IndianRupee, Clock, X, TrendingUp, Calendar } from 'lucide-react';
 
 interface StatsCardsProps {
   jobs: PrintJob[];
@@ -169,7 +169,7 @@ const StatsCards: React.FC<StatsCardsProps> = ({ jobs }) => {
       title: 'Revenue Today',
       value: `₹${historicalData.revenue.today.toLocaleString()}`,
       subtitle: `${historicalData.totalJobs.today} orders today`,
-      icon: DollarSign,
+      icon: IndianRupee,
       details: historicalData.revenue
     }
   ];

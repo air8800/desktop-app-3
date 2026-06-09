@@ -1,5 +1,44 @@
 // Types for the application
 
+// Recipe types for PDF transformations from web app
+export interface RecipeTransforms {
+  crop: { x: number; y: number; width: number; height: number } | null;
+  rotation: 0 | 90 | 180 | 270;
+  scale: number; // percentage (100 = 100%)
+  offsetX?: number;
+  offsetY?: number;
+}
+
+export interface RecipePage {
+  pageNumber: number; // 1-indexed
+  originalDimensions: { width: number; height: number };
+  transforms: RecipeTransforms;
+  hasEdits: boolean;
+  isCropped: boolean;
+  fitCropToPage: boolean;
+}
+
+export interface Recipe {
+  version: string;
+  type: string;
+  generatedAt: string;
+  source: {
+    fileName: string;
+    fileSize: number;
+    totalPages: number;
+  };
+  print: {
+    paperSize: string;
+    colorMode: 'color' | 'BW';
+    duplex: boolean;
+    copies: number;
+    pagesPerSheet: 1 | 2;
+    quality: string;
+  };
+  pages: RecipePage[];
+  destination: { shopId: string | null };
+}
+
 // Print job type - Updated to match Supabase database schema
 export interface PrintJob {
   id: string;
@@ -12,9 +51,11 @@ export interface PrintJob {
   print_type: 'Single' | 'Double';
   pages_per_sheet: number;
   nup_orientation: 'portrait' | 'landscape';
-  customer_name: string;
+  customer_name?: string | null;
   customer_email?: string;
   customer_phone?: string;
+  shop_order_number?: number | null;
+  order_identification?: 'ON_PAGE' | 'SEPARATE_SLIP' | string | null;
   total_cost: number;
   payment_status: 'pending' | 'paid' | 'failed';
   job_status: 'pending' | 'printing' | 'completed' | 'cancelled';
@@ -22,6 +63,18 @@ export interface PrintJob {
   estimated_completion?: string;
   created_at: string;
   updated_at: string;
+  // Recipe-based processing fields
+  has_edits?: boolean;
+  recipe?: Recipe | null;
+  total_pages?: number;
+  selected_pages?: number[];
+  // Processed file URL (after recipe applied)
+  processed_file_url?: string; // Data URL for preview
+  processed_file_path?: string; // Local path for printing in main process
+
+  // History fields
+  processing_time_seconds?: number;
+  completed_at?: string;
 }
 
 // Printer type

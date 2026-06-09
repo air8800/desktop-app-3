@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { BarChart3, PieChart, TrendingUp, Clock, FileText, DollarSign, Download, RefreshCw, Calendar, Target, Zap, Award, Activity, ArrowUp, ArrowDown, Filter, Eye, MoreVertical } from 'lucide-react';
+import { BarChart3, PieChart, TrendingUp, Clock, FileText, IndianRupee, Download, RefreshCw, Calendar, Target, Zap, Award, Activity, ArrowUp, ArrowDown, Filter, Eye, MoreVertical } from 'lucide-react';
 import { PrintJob } from '../types';
 
 interface QuickAnalysisProps {
@@ -253,7 +253,7 @@ const QuickAnalysis: React.FC<QuickAnalysisProps> = ({ jobs }) => {
         >
           <div className="flex items-center mb-3">
             <div className="w-10 h-10 bg-gradient-success rounded-lg flex items-center justify-center shadow-soft mr-3">
-              <DollarSign className="h-5 w-5 text-white" />
+              <IndianRupee className="h-5 w-5 text-white" />
             </div>
             <h3 className={`font-bold text-lg ${analysisType === 'revenue' ? 'text-green-600 dark:text-green-400' : 'text-gray-900 dark:text-white'}`}>
               Revenue Analysis
@@ -312,7 +312,7 @@ const QuickAnalysis: React.FC<QuickAnalysisProps> = ({ jobs }) => {
             <div className="card-full-height p-6 bg-gradient-to-r from-purple-50 to-pink-50 dark:from-purple-900/30 dark:to-pink-900/30 border-purple-200 dark:border-purple-800">
               <div className="flex items-center justify-between mb-4">
                 <div className="w-12 h-12 bg-purple-500 rounded-xl flex items-center justify-center shadow-soft">
-                  <DollarSign className="h-6 w-6 text-white" />
+                  <IndianRupee className="h-6 w-6 text-white" />
                 </div>
                 <div className="text-xs text-purple-600 dark:text-purple-400 bg-purple-100 dark:bg-purple-900 px-2 py-1 rounded-full">This Month</div>
               </div>
@@ -407,7 +407,7 @@ const QuickAnalysis: React.FC<QuickAnalysisProps> = ({ jobs }) => {
           <div className="card-full-height p-8 shadow-large">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center">
-                <DollarSign className="h-6 w-6 mr-2" />
+                <IndianRupee className="h-6 w-6 mr-2" />
                 Revenue Breakdown
               </h3>
               <button
@@ -634,7 +634,7 @@ const QuickAnalysis: React.FC<QuickAnalysisProps> = ({ jobs }) => {
           onClick={() => downloadAnalysisReport('revenue')}
           className="btn-success shadow-large hover:shadow-xl"
         >
-          <DollarSign className="h-5 w-5 mr-2" />
+          <IndianRupee className="h-5 w-5 mr-2" />
           Download Revenue Analysis
         </button>
         <button

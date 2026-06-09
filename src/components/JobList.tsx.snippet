@@ -1,0 +1,10 @@
+  // Safety: If the currently printing job becomes 'completed', clear the printing state
+  useEffect(() => {
+    if (currentlyPrinting) {
+      const job = jobs.find(j => j.id === currentlyPrinting.jobId);
+      if (job && job.job_status === 'completed') {
+        console.log('🧹 Safety cleanup: Found completed job still in currentlyPrinting, clearing...');
+        setCurrentlyPrinting(null);
+      }
+    }
+  }, [jobs, currentlyPrinting]);

@@ -3,7 +3,7 @@ import PrinterList from '../components/PrinterList';
 import PrinterConfig from '../components/PrinterConfig';
 import CostConfig from '../components/CostConfig';
 import { Printer, PrinterConfigItem, PaperSize, CostConfigItem } from '../types';
-import { Settings, Printer as PrinterIcon, DollarSign, RefreshCw } from 'lucide-react';
+import { Settings, Printer as PrinterIcon, IndianRupee, RefreshCw } from 'lucide-react';
 import { syncPrinterConfigs, syncCostConfigs, forceSyncAllConfigurations } from '../utils/supabase';
 
 const STORAGE_KEY = 'printer-configs';
@@ -179,137 +179,100 @@ const Printers: React.FC = () => {
     {
       id: 'cost',
       label: 'Cost Configuration',
-      icon: DollarSign,
-      description: 'Set competitive pricing with bulk discounts and tier management'
+      icon: IndianRupee,
+      description: 'Set per-page rates in ₹ with bulk discounts and tiers'
     }
   ];
 
+  const readyCount = printers.filter((p) => p.status === 'Ready').length;
+  const activeTabMeta = tabs.find((t) => t.id === activeTab);
+
   return (
     <div className="container-max-space animate-fade-in">
-      {/* Header */}
       <div className="mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center">
-            <div className="w-12 h-12 bg-gradient-primary rounded-xl flex items-center justify-center shadow-large mr-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-gradient-primary rounded-xl flex items-center justify-center shadow-soft shrink-0">
               <PrinterIcon className="h-6 w-6 text-white" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-gradient-primary">Printer Management</h1>
-              <p className="text-gray-600 dark:text-gray-400">Configure printers, paper sizes, and pricing</p>
+              <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Printers & pricing</h1>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mt-0.5">
+                Devices on this PC, paper routing, and ₹ rates for your web shop
+              </p>
             </div>
           </div>
-          
-          {/* 🔥 NEW: Force Sync Button */}
+
           <button
             onClick={handleForceSyncAll}
             disabled={isForceSyncing}
-            className="btn-primary shadow-large hover:shadow-xl disabled:opacity-50"
+            className="btn-secondary shrink-0 disabled:opacity-50"
+            title="Push printer and pricing config to your online shop"
           >
             {isForceSyncing ? (
-              <div className="flex items-center">
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
-                Syncing All Data...
-              </div>
+              <>
+                <span className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2 inline-block align-middle" />
+                Syncing…
+              </>
             ) : (
-              <div className="flex items-center">
-                <RefreshCw className="h-4 w-4 mr-2" />
-                Force Sync All Data
-              </div>
+              <>
+                <RefreshCw className="h-4 w-4 mr-2 inline" />
+                Sync to web shop
+              </>
             )}
           </button>
         </div>
 
-        {/* Professional Tab Navigation */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {tabs.map((tab) => {
-            const Icon = tab.icon;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id as any)}
-                className={`card p-4 text-left transition-all duration-300 border-2 cursor-pointer ${
-                  activeTab === tab.id
-                    ? 'border-blue-500 dark:border-blue-400 shadow-xl bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/30 dark:to-indigo-900/30'
-                    : 'border-transparent hover:border-gray-300 dark:hover:border-gray-600 hover:shadow-large'
-                }`}
-              >
-                <div className="flex items-center mb-3">
-                  <div className="w-10 h-10 bg-gradient-primary rounded-lg flex items-center justify-center shadow-soft mr-3">
-                    <Icon className="h-5 w-5 text-white" />
-                  </div>
-                  <div className="flex-1">
-                    <h3 className={`font-bold ${
-                      activeTab === tab.id ? 'text-blue-600 dark:text-blue-400' : 'text-gray-900 dark:text-white'
-                    }`}>
-                      {tab.label}
-                    </h3>
-                  </div>
-                  {activeTab === tab.id && (
-                    <div className="w-3 h-3 bg-blue-500 rounded-full animate-pulse"></div>
-                  )}
-                </div>
-                <p className="text-sm text-gray-600 dark:text-gray-400">
-                  {tab.description}
-                </p>
-              </button>
-            );
-          })}
+        <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div
+            className="inline-flex flex-wrap gap-1 p-1 rounded-xl bg-gray-100/90 dark:bg-gray-800/90 border border-gray-200 dark:border-gray-700"
+            role="tablist"
+          >
+            {tabs.map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => setActiveTab(tab.id as typeof activeTab)}
+                  className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                    isActive
+                      ? 'bg-white dark:bg-gray-700 text-blue-700 dark:text-blue-300 shadow-sm'
+                      : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                  }`}
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {activeTab === 'list' && printers.length > 0 && (
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              <span className="font-semibold text-gray-800 dark:text-gray-200">{readyCount}</span> ready ·{' '}
+              <span className="font-semibold text-gray-800 dark:text-gray-200">{printers.length}</span> total ·{' '}
+              <span className="font-semibold text-gray-800 dark:text-gray-200">{printerConfigs.length}</span> size maps
+            </p>
+          )}
         </div>
+
+        {activeTabMeta && (
+          <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">{activeTabMeta.description}</p>
+        )}
       </div>
 
-      {/* Tab Content with Full Space Utilization */}
       <div className="content-max-space animate-slide-up">
         {activeTab === 'list' && (
           <div className="space-y-6 h-full">
-            {/* Printer List with Full Height */}
-            <div className="flex-1">
-              <PrinterList 
-                printers={printers} 
-                isLoading={isLoading} 
-                onRefresh={loadPrinters} 
-              />
-            </div>
-            
-            {/* Printer Status Summary */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="card p-4 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/30 dark:to-indigo-900/30 border-blue-200 dark:border-blue-800">
-                <div className="flex items-center">
-                  <div className="w-10 h-10 bg-blue-500 rounded-lg flex items-center justify-center shadow-soft mr-3">
-                    <PrinterIcon className="h-5 w-5 text-white" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-blue-800 dark:text-blue-300">Online Printers</h3>
-                    <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">
-                      {printers.filter(p => p.status === 'Ready').length}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="card p-4 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/30 dark:to-indigo-900/30 border-blue-200 dark:border-blue-800">
-                <div className="flex items-center">
-                  <div className="w-10 h-10 bg-blue-500 rounded-lg flex items-center justify-center shadow-soft mr-3">
-                    <PrinterIcon className="h-5 w-5 text-white" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-blue-800 dark:text-blue-300">Total Printers</h3>
-                    <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">{printers.length}</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="card p-4 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/30 dark:to-indigo-900/30 border-blue-200 dark:border-blue-800">
-                <div className="flex items-center">
-                  <div className="w-10 h-10 bg-blue-500 rounded-lg flex items-center justify-center shadow-soft mr-3">
-                    <Settings className="h-5 w-5 text-white" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-blue-800 dark:text-blue-300">Configured</h3>
-                    <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">{printerConfigs.length}</p>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <PrinterList
+              printers={printers}
+              isLoading={isLoading}
+              onRefresh={loadPrinters}
+            />
           </div>
         )}
 

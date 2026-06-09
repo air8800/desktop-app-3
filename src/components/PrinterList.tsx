@@ -1,6 +1,6 @@
 import React from 'react';
 import { Printer } from '../types';
-import { Printer as PrinterIcon, Check, AlertCircle } from 'lucide-react';
+import { Printer as PrinterIcon, Check, AlertCircle, RefreshCw } from 'lucide-react';
 
 interface PrinterListProps {
   printers: Printer[];
@@ -10,70 +10,80 @@ interface PrinterListProps {
 
 const PrinterList: React.FC<PrinterListProps> = ({ printers, isLoading, onRefresh }) => {
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4">
-      <div className="flex justify-between items-center mb-4">
-        <h2 className="text-xl font-bold">Connected Printers</h2>
-        <button 
+    <div className="card p-6 shadow-large">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
+        <div>
+          <h2 className="text-lg font-bold text-gray-900 dark:text-white">Connected printers</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+            Printers detected on this computer for PrintGet jobs
+          </p>
+        </div>
+        <button
+          type="button"
           onClick={onRefresh}
           disabled={isLoading}
-          className={`px-4 py-2 rounded-md transition-colors ${
-            isLoading 
-              ? 'bg-gray-300 dark:bg-gray-700 cursor-not-allowed' 
-              : 'bg-blue-600 hover:bg-blue-700 text-white'
-          }`}
+          className="btn-primary disabled:opacity-50 shrink-0"
         >
-          {isLoading ? 'Scanning...' : 'Refresh Printers'}
+          <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
+          {isLoading ? 'Scanning…' : 'Refresh list'}
         </button>
       </div>
 
       {printers.length > 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {printers.map((printer, index) => (
-            <div 
-              key={index}
-              className={`${
-                printer.default 
-                  ? 'border-blue-500 dark:border-blue-600' 
-                  : 'border-gray-200 dark:border-gray-700'
-              } border-2 rounded-lg p-4 relative transition-all hover:shadow-md`}
+            <div
+              key={`${printer.name}-${index}`}
+              className={`relative rounded-xl border p-4 transition-shadow hover:shadow-md ${
+                printer.default
+                  ? 'border-blue-400 dark:border-blue-500 bg-blue-50/50 dark:bg-blue-900/20'
+                  : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800/50'
+              }`}
             >
               {printer.default && (
-                <span className="absolute top-2 right-2 bg-blue-600 text-white text-xs font-bold px-2 py-1 rounded-full">
+                <span className="absolute top-3 right-3 text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-600 text-white">
                   Default
                 </span>
               )}
-              <div className="flex items-center mb-2">
-                <PrinterIcon className="h-8 w-8 text-blue-600 dark:text-blue-400 mr-2" />
-                <h3 className="text-lg font-semibold">{printer.name}</h3>
-              </div>
-              <div className="flex items-center mt-2">
-                <span className={`flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                  printer.status === 'Ready'
-                    ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300'
-                    : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-300'
-                }`}>
-                  {printer.status === 'Ready' ? (
-                    <Check className="h-3 w-3 mr-1" />
-                  ) : (
-                    <AlertCircle className="h-3 w-3 mr-1" />
-                  )}
-                  {printer.status}
-                </span>
+              <div className="flex items-start gap-3 pr-16">
+                <div className="w-10 h-10 rounded-lg bg-gradient-primary flex items-center justify-center shrink-0">
+                  <PrinterIcon className="h-5 w-5 text-white" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="font-semibold text-gray-900 dark:text-white truncate" title={printer.name}>
+                    {printer.name}
+                  </h3>
+                  <span
+                    className={`inline-flex items-center mt-2 px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                      printer.status === 'Ready'
+                        ? 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300'
+                        : 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300'
+                    }`}
+                  >
+                    {printer.status === 'Ready' ? (
+                      <Check className="h-3 w-3 mr-1 shrink-0" />
+                    ) : (
+                      <AlertCircle className="h-3 w-3 mr-1 shrink-0" />
+                    )}
+                    {printer.status}
+                  </span>
+                </div>
               </div>
             </div>
           ))}
         </div>
       ) : (
-        <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+        <div className="text-center py-12 text-gray-500 dark:text-gray-400 rounded-xl border border-dashed border-gray-200 dark:border-gray-700">
           {isLoading ? (
             <div className="flex flex-col items-center">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
-              <p>Scanning for printers...</p>
+              <div className="w-10 h-10 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mb-4" />
+              <p className="font-medium text-gray-700 dark:text-gray-300">Scanning for printers…</p>
             </div>
           ) : (
             <div className="flex flex-col items-center">
-              <PrinterIcon className="h-12 w-12 mb-4 text-gray-400" />
-              <p>No printers found. Click "Refresh Printers" to scan again.</p>
+              <PrinterIcon className="h-12 w-12 mb-3 text-gray-300 dark:text-gray-600" />
+              <p className="font-medium text-gray-700 dark:text-gray-300">No printers found</p>
+              <p className="text-sm mt-1 max-w-sm">Connect a printer to this PC, then tap Refresh list.</p>
             </div>
           )}
         </div>

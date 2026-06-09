@@ -1,4 +1,3 @@
-import * as pdfjsLib from 'pdfjs-dist';
 import { getCachedPdfDocument } from './pdfUtils';
 
 // Paper size dimensions in points (1 point = 1/72 inch)
@@ -149,7 +148,8 @@ export const renderHighQualityPdfPage = async (
   pageNumber: number,
   canvas: HTMLCanvasElement,
   scale: number = 1.0,
-  devicePixelRatio: number = window.devicePixelRatio || 1
+  devicePixelRatio: number = window.devicePixelRatio || 1,
+  preventStyleResize: boolean = false
 ): Promise<void> => {
   try {
     console.log('🖼️ Rendering single page:', { pageNumber, scale });
@@ -163,8 +163,8 @@ export const renderHighQualityPdfPage = async (
 
     const page = await pdfDocument.getPage(pageNumber);
 
-    // Use moderate quality multiplier to prevent crashes
-    const qualityMultiplier = Math.min(2, devicePixelRatio);
+    // Use moderate quality multiplier to prevent crashes and improve performance
+    const qualityMultiplier = Math.min(1.5, devicePixelRatio);
     const viewport = page.getViewport({ scale: scale * qualityMultiplier });
     const context = canvas.getContext('2d');
 
@@ -175,8 +175,11 @@ export const renderHighQualityPdfPage = async (
     // Set canvas size for high quality rendering
     canvas.width = viewport.width;
     canvas.height = viewport.height;
-    canvas.style.width = `${viewport.width / qualityMultiplier}px`;
-    canvas.style.height = `${viewport.height / qualityMultiplier}px`;
+
+    if (!preventStyleResize) {
+      canvas.style.width = `${viewport.width / qualityMultiplier}px`;
+      canvas.style.height = `${viewport.height / qualityMultiplier}px`;
+    }
 
     // Clear canvas first with white background
     context.fillStyle = '#ffffff';
@@ -221,7 +224,8 @@ export const renderNupPreview = async (
   nupPages: number,
   orientation: 'portrait' | 'landscape',
   scale: number = 1.0,
-  totalPdfPages: number
+  totalPdfPages: number,
+  preventStyleResize: boolean = false
 ): Promise<void> => {
   try {
     console.log('🔧 Starting N-up render:', { sheetNumber, nupPages, orientation, paperSize });
@@ -233,15 +237,18 @@ export const renderNupPreview = async (
       throw new Error('Could not get canvas context');
     }
 
-    // Use moderate quality multiplier to prevent crashes
-    const qualityMultiplier = Math.min(2, window.devicePixelRatio || 1);
+    // Use moderate quality multiplier to prevent crashes and improve performance
+    const qualityMultiplier = Math.min(1.5, window.devicePixelRatio || 1);
     const displayScale = scale * qualityMultiplier;
 
     // Set canvas size
     canvas.width = layout.paperWidth * displayScale;
     canvas.height = layout.paperHeight * displayScale;
-    canvas.style.width = `${layout.paperWidth * scale}px`;
-    canvas.style.height = `${layout.paperHeight * scale}px`;
+
+    if (!preventStyleResize) {
+      canvas.style.width = `${layout.paperWidth * scale}px`;
+      canvas.style.height = `${layout.paperHeight * scale}px`;
+    }
 
     // Clear canvas with white background
     context.fillStyle = '#ffffff';
@@ -411,12 +418,203 @@ export const calculateNupOptimalScale = (
 ): number => {
   const layout = calculateNupLayout(paperSize, nupPages, orientation);
 
-  const scaleX = (containerWidth * 0.9) / layout.paperWidth;
-  const scaleY = (containerHeight * 0.9) / layout.paperHeight;
+  const scaleX = (containerWidth * 0.85) / layout.paperWidth;
+  const scaleY = (containerHeight * 0.85) / layout.paperHeight;
 
   const optimalScale = Math.min(scaleX, scaleY);
 
   return Math.max(0.3, Math.min(optimalScale, 1.5));
+};
+
+/**
+ * Calculate optimal scale for displaying a paper-sized preview in a container
+ */
+export const calculatePaperOptimalScale = (
+  paperSize: PaperSizeKey,
+  containerWidth: number,
+  containerHeight: number
+): number => {
+  const paper = PAPER_SIZES[paperSize];
+  if (!paper) return 1.0;
+
+  const scaleX = (containerWidth * 0.85) / paper.width;
+  const scaleY = (containerHeight * 0.85) / paper.height;
+
+  const optimalScale = Math.min(scaleX, scaleY);
+  return Math.max(0.3, Math.min(optimalScale, 3.0));
+};
+
+/**
+ * Render a single PDF page fitted onto a paper-sized canvas.
+ * This simulates how the print engine will output the page:
+ * - Canvas is the paper size
+ * - PDF content is scaled to optimally fill the paper (fit-to-page)
+ * - Auto-rotates landscape content on portrait paper for optimal space usage
+ * - Content is centered on the paper
+ */
+export const renderSinglePageOnPaper = async (
+  fileUrl: string,
+  pageNumber: number,
+  canvas: HTMLCanvasElement,
+  paperSize: PaperSizeKey,
+  scale: number = 1.0,
+  devicePixelRatio: number = window.devicePixelRatio || 1,
+  preventStyleResize: boolean = false,
+  marginFactor: number = 0.92
+): Promise<void> => {
+  try {
+    const paper = PAPER_SIZES[paperSize];
+    if (!paper) throw new Error(`Unknown paper size: ${paperSize}`);
+
+    const pdfDocument = await getCachedPdfDocument(fileUrl);
+    if (pageNumber < 1 || pageNumber > pdfDocument.numPages) {
+      throw new Error(`Invalid page number ${pageNumber}. Document has ${pdfDocument.numPages} pages.`);
+    }
+
+    const page = await pdfDocument.getPage(pageNumber);
+    const baseViewport = page.getViewport({ scale: 1.0 });
+
+    // Determine effective content dimensions
+    let contentW = baseViewport.width;
+    let contentH = baseViewport.height;
+
+    const contentIsLandscape = contentW > contentH;
+    const paperIsPortrait = paper.width < paper.height;
+
+    // Decide if we should auto-rotate content for optimal space usage
+    // If content is landscape and paper is portrait, rotating 90° uses more paper area
+    let shouldAutoRotate = false;
+    if (contentIsLandscape && paperIsPortrait) {
+      // Check if rotating gives better area usage
+      const fitScaleNormal = Math.min(paper.width / contentW, paper.height / contentH);
+      const fitScaleRotated = Math.min(paper.width / contentH, paper.height / contentW);
+      shouldAutoRotate = fitScaleRotated > fitScaleNormal;
+    } else if (!contentIsLandscape && !paperIsPortrait) {
+      // Portrait content on landscape paper
+      const fitScaleNormal = Math.min(paper.width / contentW, paper.height / contentH);
+      const fitScaleRotated = Math.min(paper.width / contentH, paper.height / contentW);
+      shouldAutoRotate = fitScaleRotated > fitScaleNormal;
+    }
+
+    // After potential rotation, determine the effective content dimensions for fitting
+    let effectiveW = contentW;
+    let effectiveH = contentH;
+    if (shouldAutoRotate) {
+      [effectiveW, effectiveH] = [effectiveH, effectiveW];
+    }
+
+    // Calculate fit-to-page scale (allow both up and down scaling)
+    // marginFactor controls how much of the paper area is used (1.0 = edge-to-edge, 0.92 = 4% margin each side)
+    const fitScaleX = (paper.width * marginFactor) / effectiveW;
+    const fitScaleY = (paper.height * marginFactor) / effectiveH;
+    const fitScale = Math.min(fitScaleX, fitScaleY);
+
+    console.log('📄 renderSinglePageOnPaper:', {
+      pageNumber,
+      paperSize,
+      paperDims: `${paper.width}x${paper.height}`,
+      contentDims: `${contentW.toFixed(0)}x${contentH.toFixed(0)}`,
+      shouldAutoRotate,
+      fitScale: fitScale.toFixed(3),
+      viewScale: scale.toFixed(3)
+    });
+
+    // Quality multiplier for hi-DPI
+    const qualityMultiplier = Math.min(1.5, devicePixelRatio);
+    const displayScale = scale * qualityMultiplier;
+
+    // Set canvas to paper dimensions at the display scale
+    canvas.width = paper.width * displayScale;
+    canvas.height = paper.height * displayScale;
+
+    if (!preventStyleResize) {
+      canvas.style.width = `${paper.width * scale}px`;
+      canvas.style.height = `${paper.height * scale}px`;
+    }
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Could not get canvas context');
+
+    // White paper background
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Draw subtle paper border
+    ctx.strokeStyle = '#d0d0d0';
+    ctx.lineWidth = 1 * displayScale;
+    ctx.strokeRect(0.5, 0.5, canvas.width - 1, canvas.height - 1);
+
+    // Render the PDF page to a temp canvas at the fit scale
+    const pdfRenderScale = fitScale * qualityMultiplier;
+    let renderViewport;
+    if (shouldAutoRotate) {
+      // Rotate the viewport 90° for auto-rotation
+      renderViewport = page.getViewport({ scale: fitScale * qualityMultiplier, rotation: 90 });
+    } else {
+      renderViewport = page.getViewport({ scale: fitScale * qualityMultiplier });
+    }
+
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = renderViewport.width;
+    tempCanvas.height = renderViewport.height;
+
+    const tempCtx = tempCanvas.getContext('2d');
+    if (!tempCtx) throw new Error('Could not get temp canvas context');
+
+    tempCtx.imageSmoothingEnabled = true;
+    tempCtx.imageSmoothingQuality = 'high';
+
+    await page.render({
+      canvasContext: tempCtx,
+      viewport: renderViewport,
+      intent: 'display',
+      annotationMode: 0
+    }).promise;
+
+    // Center the rendered content on the paper canvas
+    // The content was rendered at fitScale (which includes the margin factor)
+    // We need to draw it on the paper canvas at the correct proportional size
+
+    // The rendered content dimensions in paper-space (points) are:
+    //   scaledContentW = effectiveW * fitScale  (in points, with margin applied)
+    //   scaledContentH = effectiveH * fitScale  (in points, with margin applied)
+    // On the canvas, these become:
+    //   drawW = scaledContentW * displayScale = effectiveW * fitScale * displayScale
+    //   drawH = scaledContentH * displayScale = effectiveH * fitScale * displayScale
+    // But tempCanvas was rendered at fitScale * qualityMultiplier, so we scale it to displayScale:
+    //   drawW = tempCanvas.width * (displayScale / pdfRenderScale)
+    //     BUT this equals effectiveW * scale * qualityMultiplier which CANCELS the margin
+    // FIX: Draw at the correct size that preserves the fitScale margin
+    const scaledContentW = effectiveW * fitScale; // content size in paper points (with margin)
+    const scaledContentH = effectiveH * fitScale;
+    const drawW = scaledContentW * displayScale;
+    const drawH = scaledContentH * displayScale;
+
+    const offsetX = (canvas.width - drawW) / 2;
+    const offsetY = (canvas.height - drawH) / 2;
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(
+      tempCanvas,
+      0, 0, tempCanvas.width, tempCanvas.height,
+      offsetX, offsetY,
+      drawW, drawH
+    );
+
+    console.log('✨ Paper preview rendered:', {
+      pageNumber,
+      paperSize,
+      canvasSize: `${canvas.width}x${canvas.height}`,
+      contentOnPaper: `${Math.round(tempCanvas.width * (displayScale / pdfRenderScale))}x${Math.round(tempCanvas.height * (displayScale / pdfRenderScale))}`,
+      offset: `${Math.round(offsetX)},${Math.round(offsetY)}`,
+      autoRotated: shouldAutoRotate
+    });
+
+  } catch (error) {
+    console.error('Error rendering single page on paper:', error);
+    throw error;
+  }
 };
 
 /**

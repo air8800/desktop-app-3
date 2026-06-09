@@ -10,12 +10,12 @@ interface ShopInfo {
   googleMapsLink: string;
 }
 
-interface ShopTiming {
-  day: string;
-  isOpen: boolean;
-  openTime: string;
-  closeTime: string;
-}
+import {
+  parseShopTimingFromStorage,
+  hasOpenShopDay,
+  formatShopTimingSummary,
+} from '../utils/shopTimingFormat';
+import type { ShopTiming } from '../utils/defaultShopHours';
 
 interface PrintInstructions {
   language: string;
@@ -37,8 +37,8 @@ const QRGenerator: React.FC = () => {
     email: '',
     googleMapsLink: ''
   });
-  
-  const [shopTiming, setShopTiming] = useState<ShopTiming[]>([]);
+
+  const [shopTiming, setShopTiming] = useState<ShopTiming | null>(null);
   const [qrCodeDataURL, setQrCodeDataURL] = useState<string>('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
@@ -144,57 +144,76 @@ const QRGenerator: React.FC = () => {
   };
 
   const fontOptions = [
-    'Arial', 'Helvetica', 'Times New Roman', 'Georgia', 'Verdana', 
+    'Arial', 'Helvetica', 'Times New Roman', 'Georgia', 'Verdana',
     'Tahoma', 'Trebuchet MS', 'Impact', 'Comic Sans MS'
   ];
 
   useEffect(() => {
-    const savedShopInfo = localStorage.getItem('shop-info');
-    if (savedShopInfo) {
-      setShopInfo(JSON.parse(savedShopInfo));
+    try {
+      const savedShopInfo = localStorage.getItem('shop-info');
+      if (savedShopInfo) {
+        setShopInfo(JSON.parse(savedShopInfo));
+      }
+    } catch {
+      /* ignore corrupt shop-info */
     }
 
-    const savedTiming = localStorage.getItem('shop-timing');
-    if (savedTiming) {
-      setShopTiming(JSON.parse(savedTiming));
-    }
+    setShopTiming(parseShopTimingFromStorage(localStorage.getItem('shop-timing')));
 
     const savedShopId = localStorage.getItem('shop-id');
     if (savedShopId) {
       setShopId(savedShopId);
     }
 
-    const savedInstructions = localStorage.getItem('print-instructions');
-    if (savedInstructions) {
-      setPrintInstructions(JSON.parse(savedInstructions));
+    try {
+      const savedInstructions = localStorage.getItem('print-instructions');
+      if (savedInstructions) {
+        setPrintInstructions(JSON.parse(savedInstructions));
+      }
+    } catch {
+      /* ignore corrupt print-instructions */
     }
+
+    const loadStoredQr = async () => {
+      try {
+        if (window.electron?.getQRImage) {
+          const result = await window.electron.getQRImage();
+          if (result.success && result.data && String(result.data).startsWith('data:')) {
+            setQrCodeDataURL(String(result.data));
+          }
+        }
+      } catch {
+        /* optional stored shop QR */
+      }
+    };
+    void loadStoredQr();
   }, []);
 
   const extractAddressFromMapsLink = (mapsLink: string): string => {
     try {
       const url = new URL(mapsLink);
-      
+
       const queryParam = url.searchParams.get('query');
       if (queryParam) {
         return decodeURIComponent(queryParam);
       }
-      
+
       const qParam = url.searchParams.get('q');
       if (qParam) {
         return decodeURIComponent(qParam);
       }
-      
+
       const pathname = url.pathname;
       if (pathname.includes('/place/')) {
         const placeName = pathname.split('/place/')[1].split('/')[0];
         return decodeURIComponent(placeName.replace(/\+/g, ' '));
       }
-      
+
       if (pathname.includes('/search/')) {
         const searchTerm = pathname.split('/search/')[1].split('/')[0];
         return decodeURIComponent(searchTerm.replace(/\+/g, ' '));
       }
-      
+
       if (pathname.includes('/maps/')) {
         const parts = pathname.split('/');
         const addressIndex = parts.findIndex(part => part === 'maps') + 1;
@@ -202,7 +221,7 @@ const QRGenerator: React.FC = () => {
           return decodeURIComponent(parts[addressIndex].replace(/\+/g, ' '));
         }
       }
-      
+
       return '';
     } catch (error) {
       console.error('Error extracting address from maps link:', error);
@@ -212,7 +231,7 @@ const QRGenerator: React.FC = () => {
 
   const handleExtractAddress = async () => {
     if (!shopInfo.googleMapsLink) return;
-    
+
     setIsExtractingAddress(true);
     try {
       const extractedAddress = extractAddressFromMapsLink(shopInfo.googleMapsLink);
@@ -234,29 +253,28 @@ const QRGenerator: React.FC = () => {
 
   const validateShopInfo = (): string[] => {
     const errors: string[] = [];
-    
+
     if (!shopInfo.name.trim()) {
       errors.push('Shop name is required');
     }
-    
+
     if (!shopInfo.address.trim()) {
       errors.push('Shop address is required');
     }
-    
+
     if (!shopInfo.phone.trim()) {
       errors.push('Phone number is required');
     }
-    
+
     const phoneRegex = /^[\+]?[1-9][\d]{0,15}$/;
     if (shopInfo.phone.trim() && !phoneRegex.test(shopInfo.phone.replace(/[\s\-\(\)]/g, ''))) {
       errors.push('Please enter a valid phone number');
     }
-    
-    const hasOpenDays = shopTiming.some(timing => timing.isOpen);
-    if (shopTiming.length > 0 && !hasOpenDays) {
-      errors.push('Shop must be open at least one day of the week');
+
+    if (shopTiming && !hasOpenShopDay(shopTiming)) {
+      errors.push('Shop must be open at least one day of the week (check Shop Hours in Settings)');
     }
-    
+
     return errors;
   };
 
@@ -267,31 +285,11 @@ const QRGenerator: React.FC = () => {
       setShopId(currentShopId);
       localStorage.setItem('shop-id', currentShopId);
     }
-    
-    const baseUrl = 'https://xerox-print-shop.vercel.app';
+
+    const baseUrl = 'https://printget.in';
     const fullWebAppUrl = `${baseUrl}/shop/${currentShopId}`;
     setWebAppUrl(fullWebAppUrl);
-    
-    const qrData = {
-      url: fullWebAppUrl,
-      shopId: currentShopId,
-      shopInfo: {
-        name: shopInfo.name,
-        address: shopInfo.address,
-        phone: shopInfo.phone,
-        email: shopInfo.email || '',
-        googleMapsLink: shopInfo.googleMapsLink || ''
-      },
-      timing: shopTiming.filter(t => t.isOpen).map(t => ({
-        day: t.day,
-        open: t.openTime,
-        close: t.closeTime
-      })),
-      type: 'xerox_shop',
-      version: '1.0',
-      generated: new Date().toISOString()
-    };
-    
+
     const qrOptions = {
       errorCorrectionLevel: 'M' as const,
       type: 'image/png' as const,
@@ -303,9 +301,10 @@ const QRGenerator: React.FC = () => {
       },
       width: 400
     };
-    
+
     try {
-      const qrDataURL = await QRCodeLib.toDataURL(JSON.stringify(qrData), qrOptions);
+      // Encode just the URL - shop data is fetched from Supabase when the page loads
+      const qrDataURL = await QRCodeLib.toDataURL(fullWebAppUrl, qrOptions);
       return qrDataURL;
     } catch (error) {
       console.error('Error generating QR code:', error);
@@ -315,26 +314,26 @@ const QRGenerator: React.FC = () => {
 
   const handleGenerateQR = async () => {
     const errors = validateShopInfo();
-    
+
     if (errors.length > 0) {
       setValidationErrors(errors);
       return;
     }
-    
+
     setValidationErrors([]);
     setIsGenerating(true);
-    
+
     try {
       const qrDataURL = await generateQRCode();
       setQrCodeDataURL(qrDataURL);
       setShowPreview(true);
-      
+
       if (window.electron) {
         await window.electron.saveQRImage(qrDataURL);
       }
-      
+
       localStorage.setItem('shop-info', JSON.stringify(shopInfo));
-      
+
     } catch (error) {
       console.error('Error generating QR code:', error);
       setValidationErrors(['Failed to generate QR code. Please try again.']);
@@ -345,7 +344,7 @@ const QRGenerator: React.FC = () => {
 
   const downloadQRCode = () => {
     if (!qrCodeDataURL) return;
-    
+
     const link = document.createElement('a');
     link.download = `${shopInfo.name.replace(/\s+/g, '_')}_QR_Code.png`;
     link.href = qrCodeDataURL;
@@ -354,7 +353,7 @@ const QRGenerator: React.FC = () => {
 
   const copyUrlToClipboard = async () => {
     if (!webAppUrl) return;
-    
+
     try {
       await navigator.clipboard.writeText(webAppUrl);
       setCopied(true);
@@ -517,21 +516,15 @@ const QRGenerator: React.FC = () => {
     printWindow.document.write(printContent);
     printWindow.document.close();
     printWindow.focus();
-    
+
     setTimeout(() => {
       printWindow.print();
     }, 500);
   };
 
   const formatTiming = (): string => {
-    if (shopTiming.length === 0) return 'No timing set';
-    
-    const openDays = shopTiming.filter(t => t.isOpen);
-    if (openDays.length === 0) return 'Closed all days';
-    
-    return openDays.map(t => 
-      `${t.day}: ${t.openTime} - ${t.closeTime}`
-    ).join(', ');
+    if (!shopTiming) return 'No timing set — configure in Settings → Shop Hours';
+    return formatShopTimingSummary(shopTiming);
   };
 
   return (
@@ -578,7 +571,7 @@ const QRGenerator: React.FC = () => {
           <FileText className="h-5 w-5 mr-2" />
           Current Shop Information
         </h3>
-        
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="space-y-3">
             <div className="flex items-center p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
@@ -590,7 +583,7 @@ const QRGenerator: React.FC = () => {
                 </p>
               </div>
             </div>
-            
+
             <div className="flex items-start p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
               <MapPin className="h-4 w-4 text-green-600 mr-3 mt-1" />
               <div className="flex-1">
@@ -600,7 +593,7 @@ const QRGenerator: React.FC = () => {
                 </p>
               </div>
             </div>
-            
+
             <div className="flex items-center p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
               <Phone className="h-4 w-4 text-blue-600 mr-3" />
               <div className="flex-1">
@@ -653,9 +646,8 @@ const QRGenerator: React.FC = () => {
         <button
           onClick={handleGenerateQR}
           disabled={isGenerating}
-          className={`flex-1 btn-primary py-3 shadow-xl hover:shadow-2xl transform hover:scale-105 transition-all duration-300 ${
-            isGenerating ? 'opacity-50 cursor-not-allowed scale-100' : ''
-          }`}
+          className={`flex-1 btn-primary py-3 shadow-xl hover:shadow-2xl transform hover:scale-105 transition-all duration-300 ${isGenerating ? 'opacity-50 cursor-not-allowed scale-100' : ''
+            }`}
         >
           {isGenerating ? (
             <div className="flex items-center justify-center">
@@ -670,7 +662,7 @@ const QRGenerator: React.FC = () => {
             </div>
           )}
         </button>
-        
+
         {qrCodeDataURL && (
           <button
             onClick={() => setShowPreview(!showPreview)}
@@ -687,13 +679,13 @@ const QRGenerator: React.FC = () => {
         <div className="card p-6 shadow-large animate-scale-in">
           <div className="flex flex-col items-center">
             <div className="bg-white p-6 rounded-xl shadow-2xl mb-6 border-4 border-gray-100 dark:border-gray-600">
-              <img 
-                src={qrCodeDataURL} 
-                alt="Shop QR Code" 
+              <img
+                src={qrCodeDataURL}
+                alt="Shop QR Code"
                 className="w-64 h-64 object-contain"
               />
             </div>
-            
+
             <div className="text-center space-y-3 w-full max-w-md">
               <h3 className="text-xl font-bold text-gray-900 dark:text-white">
                 {shopInfo.name} - QR Code
@@ -701,7 +693,7 @@ const QRGenerator: React.FC = () => {
               <p className="text-gray-600 dark:text-gray-400">
                 High-quality QR code ready for printing and display
               </p>
-              
+
               {webAppUrl && (
                 <div className="card p-4 bg-blue-50 dark:bg-blue-900/30 border-blue-200 dark:border-blue-800">
                   <p className="text-sm font-medium text-blue-800 dark:text-blue-300 mb-2">Web App URL:</p>
@@ -722,7 +714,7 @@ const QRGenerator: React.FC = () => {
                 </div>
               )}
             </div>
-            
+
             <div className="flex flex-wrap gap-4 mt-6">
               <button
                 onClick={downloadQRCode}
@@ -739,7 +731,7 @@ const QRGenerator: React.FC = () => {
                 <Printer className="h-4 w-4 mr-2" />
                 Print with Instructions
               </button>
-              
+
               {webAppUrl && (
                 <a
                   href={webAppUrl}
@@ -771,9 +763,8 @@ const QRGenerator: React.FC = () => {
             </div>
             <button
               onClick={() => setIsEditingInstructions(!isEditingInstructions)}
-              className={`btn-primary shadow-large hover:shadow-xl transform hover:scale-105 transition-all duration-300 ${
-                isEditingInstructions ? 'bg-red-600 hover:bg-red-700' : ''
-              }`}
+              className={`btn-primary shadow-large hover:shadow-xl transform hover:scale-105 transition-all duration-300 ${isEditingInstructions ? 'bg-red-600 hover:bg-red-700' : ''
+                }`}
             >
               {isEditingInstructions ? (
                 <>
@@ -797,7 +788,7 @@ const QRGenerator: React.FC = () => {
                   <Palette className="h-4 w-4 mr-2" />
                   Style & Language Settings
                 </h4>
-                
+
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                   <div className="form-group">
                     <label className="form-label flex items-center">
@@ -868,7 +859,7 @@ const QRGenerator: React.FC = () => {
                   <FileText className="h-4 w-4 mr-2" />
                   Content Editing
                 </h4>
-                
+
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     <div className="form-group">
@@ -991,7 +982,7 @@ const QRGenerator: React.FC = () => {
             <CheckCircle className="h-5 w-5 mr-2" />
             QR Code Features
           </h3>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <div className="flex items-center p-3 bg-white dark:bg-gray-800 rounded-lg shadow-soft">
               <div className="w-10 h-10 bg-green-100 dark:bg-green-900 rounded-lg flex items-center justify-center mr-3">
@@ -1048,7 +1039,7 @@ const QRGenerator: React.FC = () => {
               <span>Print and display the QR code in your shop</span>
             </li>
           </ol>
-          
+
           <ol className="space-y-3 text-blue-700 dark:text-blue-400" start={5}>
             <li className="flex items-start">
               <span className="flex-shrink-0 w-6 h-6 bg-green-600 text-white rounded-full flex items-center justify-center text-sm font-bold mr-3">5</span>
@@ -1068,11 +1059,11 @@ const QRGenerator: React.FC = () => {
             </li>
           </ol>
         </div>
-        
+
         <div className="mt-6 p-4 bg-white dark:bg-gray-800 rounded-lg border border-blue-200 dark:border-blue-700">
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            <strong className="text-blue-800 dark:text-blue-300">Professional Features:</strong> High-quality 400x400px resolution, error correction level M, 
-            contains complete shop data including direct web app link, shop info, timing, and unique shop ID. 
+            <strong className="text-blue-800 dark:text-blue-300">Professional Features:</strong> High-quality 400x400px resolution, error correction level M,
+            contains complete shop data including direct web app link, shop info, timing, and unique shop ID.
             Ready for professional printing and display with customizable multilingual instructions.
           </p>
         </div>

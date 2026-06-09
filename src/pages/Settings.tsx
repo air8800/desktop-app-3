@@ -1,9 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { Settings as SettingsIcon, User, Building, CreditCard, Globe, QrCode, Palette, Bell, Shield, Database, Wifi, CheckCircle, AlertTriangle, RefreshCw, Save, Eye, EyeOff, Copy, ExternalLink, Clock, MapPin, Link2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Settings as SettingsIcon, User, Building, CreditCard, Globe, QrCode, Palette, Bell, Shield, Database, Wifi, CheckCircle, AlertTriangle, RefreshCw, Save, Eye, EyeOff, Copy, ExternalLink, Clock, MapPin, Link2, FileText, Info, ArrowRight, Scale, ShieldCheck, HelpCircle } from 'lucide-react';
 import QRUploader from '../components/QRUploader';
 import QRGenerator from '../components/QRGenerator';
 import WebAppConnection from '../components/WebAppConnection';
-import { testConnection, syncShopInfoToDatabase, syncPaymentInfo, syncBusinessDetails } from '../utils/supabase';
+import { testConnection, syncShopInfoToDatabase, syncPaymentInfo, syncBusinessDetails, fetchShopSettingsFromDatabase } from '../utils/supabase';
+import { DEFAULT_SHOP_TIMING, type ShopTiming } from '../utils/defaultShopHours';
+import {
+  generateGoogleMapsLinkFromAddress,
+  extractAddressFromMapsLink as extractAddressFromLink,
+  extractCoordinatesFromMapsLink as extractCoordsFromLink,
+  detectCurrentLocationFull,
+  getExpandUrlFn,
+} from '../utils/locationHelpers';
 
 interface SettingsProps {
   currentUser?: any;
@@ -15,6 +24,10 @@ interface ShopInfo {
   phone: string;
   email: string;
   googleMapsLink: string;
+  latitude: string;
+  longitude: string;
+  /** Shop web QR image URL from database (Settings → QR), used on print slip */
+  qr_code_url?: string;
 }
 
 interface PaymentInfo {
@@ -35,24 +48,16 @@ interface BusinessDetails {
   establishedYear: string;
 }
 
-interface ShopTiming {
-  monday: { open: string; close: string; closed: boolean };
-  tuesday: { open: string; close: string; closed: boolean };
-  wednesday: { open: string; close: string; closed: boolean };
-  thursday: { open: string; close: string; closed: boolean };
-  friday: { open: string; close: string; closed: boolean };
-  saturday: { open: string; close: string; closed: boolean };
-  sunday: { open: string; close: string; closed: boolean };
-}
-
 const Settings: React.FC<SettingsProps> = ({ currentUser }) => {
-  const [activeTab, setActiveTab] = useState<'profile' | 'shop' | 'timing' | 'payment' | 'business' | 'qr' | 'webapp' | 'system'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'shop' | 'timing' | 'payment' | 'business' | 'qr' | 'webapp' | 'legal'>('profile');
   const [shopInfo, setShopInfo] = useState<ShopInfo>({
     name: '',
     address: '',
     phone: '',
     email: '',
-    googleMapsLink: ''
+    googleMapsLink: '',
+    latitude: '',
+    longitude: ''
   });
   
   const [paymentInfo, setPaymentInfo] = useState<PaymentInfo>({
@@ -73,17 +78,12 @@ const Settings: React.FC<SettingsProps> = ({ currentUser }) => {
     establishedYear: ''
   });
 
-  const [shopTiming, setShopTiming] = useState<ShopTiming>({
-    monday: { open: '09:00', close: '18:00', closed: false },
-    tuesday: { open: '09:00', close: '18:00', closed: false },
-    wednesday: { open: '09:00', close: '18:00', closed: false },
-    thursday: { open: '09:00', close: '18:00', closed: false },
-    friday: { open: '09:00', close: '18:00', closed: false },
-    saturday: { open: '09:00', close: '16:00', closed: false },
-    sunday: { open: '09:00', close: '18:00', closed: true }
-  });
+  const [shopTiming, setShopTiming] = useState<ShopTiming>(DEFAULT_SHOP_TIMING);
 
   const [isSaving, setIsSaving] = useState(false);
+  const [isExtractingAddress, setIsExtractingAddress] = useState(false);
+  const [isExtractingCoords, setIsExtractingCoords] = useState(false);
+  const [isDetectingLocation, setIsDetectingLocation] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<{
     isConnected: boolean;
     testing: boolean;
@@ -97,29 +97,61 @@ const Settings: React.FC<SettingsProps> = ({ currentUser }) => {
   const [copied, setCopied] = useState<string | null>(null);
 
   useEffect(() => {
-    loadSettings();
+    void loadSettings();
     testSupabaseConnection();
   }, []);
 
-  const loadSettings = () => {
+  const loadSettings = async () => {
+    const emptyShopInfo: ShopInfo = {
+      name: '',
+      address: '',
+      phone: '',
+      email: '',
+      googleMapsLink: '',
+      latitude: '',
+      longitude: '',
+    };
+
+    let mergedShopInfo = { ...emptyShopInfo };
+    let mergedBusinessDetails = { ...businessDetails };
+    let mergedShopTiming = { ...shopTiming };
+
     const savedShopInfo = localStorage.getItem('shop-info');
     if (savedShopInfo) {
-      setShopInfo(JSON.parse(savedShopInfo));
-    }
-
-    const savedPaymentInfo = localStorage.getItem('payment-info');
-    if (savedPaymentInfo) {
-      setPaymentInfo(JSON.parse(savedPaymentInfo));
+      mergedShopInfo = { ...mergedShopInfo, ...JSON.parse(savedShopInfo) };
     }
 
     const savedBusinessDetails = localStorage.getItem('business-details');
     if (savedBusinessDetails) {
-      setBusinessDetails(JSON.parse(savedBusinessDetails));
+      mergedBusinessDetails = { ...mergedBusinessDetails, ...JSON.parse(savedBusinessDetails) };
     }
 
     const savedShopTiming = localStorage.getItem('shop-timing');
     if (savedShopTiming) {
-      setShopTiming(JSON.parse(savedShopTiming));
+      mergedShopTiming = { ...mergedShopTiming, ...JSON.parse(savedShopTiming) };
+    }
+
+    const shopId = localStorage.getItem('shop-id');
+    if (shopId) {
+      const dbResult = await fetchShopSettingsFromDatabase(shopId);
+      if (dbResult.success) {
+        mergedShopInfo = { ...mergedShopInfo, ...dbResult.shopInfo };
+        mergedBusinessDetails = { ...mergedBusinessDetails, ...dbResult.businessDetails };
+        mergedShopTiming = dbResult.shopTiming;
+
+        localStorage.setItem('shop-info', JSON.stringify(mergedShopInfo));
+        localStorage.setItem('business-details', JSON.stringify(mergedBusinessDetails));
+        localStorage.setItem('shop-timing', JSON.stringify(mergedShopTiming));
+      }
+    }
+
+    setShopInfo(mergedShopInfo);
+    setBusinessDetails(mergedBusinessDetails);
+    setShopTiming(mergedShopTiming);
+
+    const savedPaymentInfo = localStorage.getItem('payment-info');
+    if (savedPaymentInfo) {
+      setPaymentInfo(JSON.parse(savedPaymentInfo));
     }
   };
 
@@ -261,61 +293,76 @@ const Settings: React.FC<SettingsProps> = ({ currentUser }) => {
     }
   };
 
+  const expandUrl = getExpandUrlFn();
+
   const generateGoogleMapsLink = () => {
     if (!shopInfo.address) {
       alert('Please enter an address first');
       return;
     }
-    const encodedAddress = encodeURIComponent(shopInfo.address);
-    const mapsLink = `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
+    const mapsLink = generateGoogleMapsLinkFromAddress(shopInfo.address);
     setShopInfo(prev => ({ ...prev, googleMapsLink: mapsLink }));
-
-    const event = new CustomEvent('show-notification', {
-      detail: {
-        type: 'success',
-        message: 'Google Maps link generated from address!'
-      }
-    });
-    window.dispatchEvent(event);
+    window.dispatchEvent(new CustomEvent('show-notification', {
+      detail: { type: 'success', message: 'Google Maps link generated from address!' },
+    }));
   };
 
-  const extractAddressFromMapsLink = () => {
+  const extractAddressFromMapsLink = async () => {
     if (!shopInfo.googleMapsLink) {
       alert('Please enter a Google Maps link first');
       return;
     }
-
+    setIsExtractingAddress(true);
     try {
-      const url = new URL(shopInfo.googleMapsLink);
-      let address = '';
-
-      // Check various Google Maps URL formats
-      if (url.searchParams.has('query')) {
-        address = decodeURIComponent(url.searchParams.get('query') || '');
-      } else if (url.pathname.includes('/place/')) {
-        const placeName = url.pathname.split('/place/')[1]?.split('/')[0];
-        address = decodeURIComponent(placeName || '').replace(/\\+/g, ' ');
-      } else if (url.searchParams.has('q')) {
-        address = decodeURIComponent(url.searchParams.get('q') || '');
-      } else {
-        alert('Could not extract address from this Google Maps link format');
-        return;
-      }
-
-      if (address) {
-        setShopInfo(prev => ({ ...prev, address }));
-        const event = new CustomEvent('show-notification', {
-          detail: {
-            type: 'success',
-            message: 'Address extracted from Google Maps link!'
-          }
-        });
-        window.dispatchEvent(event);
-      } else {
-        alert('No address found in the Google Maps link');
-      }
+      const address = await extractAddressFromLink(shopInfo.googleMapsLink, expandUrl);
+      setShopInfo(prev => ({ ...prev, address }));
+      window.dispatchEvent(new CustomEvent('show-notification', {
+        detail: { type: 'success', message: 'Address extracted successfully!' },
+      }));
     } catch (error) {
-      alert('Invalid Google Maps link format');
+      alert(error instanceof Error ? error.message : 'Invalid Google Maps link format');
+    } finally {
+      setIsExtractingAddress(false);
+    }
+  };
+
+  const extractCoordinatesFromMapsLink = async () => {
+    if (!shopInfo.googleMapsLink) {
+      alert('Please enter a Google Maps link first');
+      return;
+    }
+    setIsExtractingCoords(true);
+    try {
+      const coords = await extractCoordsFromLink(shopInfo.googleMapsLink, expandUrl);
+      setShopInfo(prev => ({ ...prev, latitude: coords.latitude, longitude: coords.longitude }));
+      window.dispatchEvent(new CustomEvent('show-notification', {
+        detail: { type: 'success', message: 'Coordinates extracted successfully!' },
+      }));
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Invalid link format');
+    } finally {
+      setIsExtractingCoords(false);
+    }
+  };
+
+  const detectCurrentLocation = async () => {
+    setIsDetectingLocation(true);
+    try {
+      const patch = await detectCurrentLocationFull();
+      setShopInfo(prev => ({
+        ...prev,
+        latitude: patch.latitude || prev.latitude,
+        longitude: patch.longitude || prev.longitude,
+        address: patch.address || prev.address,
+        googleMapsLink: patch.googleMapsLink || prev.googleMapsLink,
+      }));
+      window.dispatchEvent(new CustomEvent('show-notification', {
+        detail: { type: 'success', message: 'Location detected successfully!' },
+      }));
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Failed to detect location.');
+    } finally {
+      setIsDetectingLocation(false);
     }
   };
 
@@ -383,11 +430,11 @@ const Settings: React.FC<SettingsProps> = ({ currentUser }) => {
       description: 'Connect with your customer web application'
     },
     {
-      id: 'system',
-      label: 'System',
-      icon: SettingsIcon,
-      description: 'System preferences and advanced settings'
-    }
+      id: 'legal',
+      label: 'Legal',
+      icon: Scale,
+      description: 'Terms, privacy, and policy information'
+    },
   ];
 
   return (
@@ -401,7 +448,7 @@ const Settings: React.FC<SettingsProps> = ({ currentUser }) => {
             </div>
             <div>
               <h1 className="text-2xl font-bold text-gradient-primary">Settings</h1>
-              <p className="text-gray-600 dark:text-gray-400">Configure your shop and system preferences</p>
+              <p className="text-gray-600 dark:text-gray-400">Manage your PrintGet shop profile, payments, and hours</p>
             </div>
           </div>
           
@@ -447,7 +494,7 @@ const Settings: React.FC<SettingsProps> = ({ currentUser }) => {
         )}
 
         {/* Tab Navigation */}
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
           {tabs.map((tab) => {
             const Icon = tab.icon;
             return (
@@ -605,7 +652,7 @@ const Settings: React.FC<SettingsProps> = ({ currentUser }) => {
                       type="text"
                       value={shopInfo.name}
                       onChange={(e) => setShopInfo(prev => ({ ...prev, name: e.target.value }))}
-                      placeholder="Your Xerox Shop Name"
+                      placeholder="Your shop name"
                       className="input cursor-visible"
                       autoComplete="off"
                       spellCheck="false"
@@ -646,11 +693,15 @@ const Settings: React.FC<SettingsProps> = ({ currentUser }) => {
                       <button
                         type="button"
                         onClick={extractAddressFromMapsLink}
-                        disabled={!shopInfo.googleMapsLink}
+                        disabled={!shopInfo.googleMapsLink || isExtractingAddress}
                         className="btn-secondary text-xs py-1 px-3 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        <MapPin className="h-3 w-3 mr-1" />
-                        Extract from Link
+                        {isExtractingAddress ? (
+                          <div className="w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin mr-1"></div>
+                        ) : (
+                          <MapPin className="h-3 w-3 mr-1" />
+                        )}
+                        {isExtractingAddress ? 'Extracting...' : 'Extract from Link'}
                       </button>
                     </label>
                     <textarea
@@ -687,8 +738,79 @@ const Settings: React.FC<SettingsProps> = ({ currentUser }) => {
                       autoComplete="off"
                       spellCheck="false"
                     />
-                    <p className="form-help">Paste Google Maps link or generate it from the address above</p>
+                    <div className="flex items-center justify-between mt-1">
+                      <p className="form-help m-0">Paste link to extract coordinates automatically</p>
+                      {shopInfo.googleMapsLink ? (
+                        <button
+                          type="button"
+                          onClick={extractCoordinatesFromMapsLink}
+                          disabled={isExtractingCoords}
+                          className="btn-secondary text-[10px] py-1 px-2 border-blue-200 text-blue-600 hover:bg-blue-50 disabled:opacity-50 flex items-center"
+                        >
+                          {isExtractingCoords ? (
+                            <div className="w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin mr-1"></div>
+                          ) : null}
+                          {isExtractingCoords ? 'Extracting...' : 'Extract Coordinates'}
+                        </button>
+                      ) : (
+                        <a
+                          href="https://www.google.com/maps"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="btn-secondary text-[10px] py-1 px-2"
+                        >
+                          Open Maps to Pinpoint
+                        </a>
+                      )}
+                    </div>
                   </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="form-group">
+                      <label className="form-label h-5 flex items-center justify-between">
+                        <span>Latitude</span>
+                        <button
+                          type="button"
+                          onClick={detectCurrentLocation}
+                          disabled={isDetectingLocation}
+                          className="btn-secondary text-[10px] py-0.5 px-2 border-green-200 text-green-600 hover:bg-green-50 flex items-center gap-1 -mr-2 shadow-sm disabled:opacity-50"
+                        >
+                          {isDetectingLocation ? (
+                            <div className="w-2.5 h-2.5 border-2 border-green-400 border-t-transparent rounded-full animate-spin"></div>
+                          ) : (
+                            <MapPin className="w-2.5 h-2.5" />
+                          )}
+                          {isDetectingLocation ? 'Detecting...' : 'Auto-Detect Location'}
+                        </button>
+                      </label>
+                      <input
+                        type="text"
+                        value={shopInfo.latitude || ''}
+                        onChange={(e) => setShopInfo(prev => ({ ...prev, latitude: e.target.value }))}
+                        placeholder="e.g. 18.5204"
+                        className="input cursor-visible"
+                        autoComplete="off"
+                        spellCheck="false"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label h-5 flex items-center">Longitude</label>
+                      <input
+                        type="text"
+                        value={shopInfo.longitude || ''}
+                        onChange={(e) => setShopInfo(prev => ({ ...prev, longitude: e.target.value }))}
+                        placeholder="e.g. 73.8567"
+                        className="input cursor-visible"
+                        autoComplete="off"
+                        spellCheck="false"
+                      />
+                    </div>
+                  </div>
+                  {shopInfo.latitude && shopInfo.longitude && (
+                    <p className="form-help mt-2 text-green-700">
+                      Location is saved to your PrintGet shop — no need to re-enter unless you move.
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -1183,112 +1305,45 @@ const Settings: React.FC<SettingsProps> = ({ currentUser }) => {
           </div>
         )}
 
-        {activeTab === 'system' && (
+        {activeTab === 'legal' && (
           <div className="space-y-6">
             <div className="card p-6 shadow-large">
-              <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-4 flex items-center">
-                <SettingsIcon className="h-5 w-5 mr-2" />
-                System Information
+              <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-6 flex items-center">
+                <Scale className="h-5 w-5 mr-2 text-blue-600 dark:text-blue-400" />
+                Legal & Policies
               </h3>
               
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="space-y-4">
-                  <div className="form-group">
-                    <label className="form-label">Application Version</label>
-                    <input
-                      type="text"
-                      value="1.0.0"
-                      readOnly
-                      className="input bg-gray-50 dark:bg-gray-700"
-                    />
-                  </div>
-                  
-                  <div className="form-group">
-                    <label className="form-label">Platform</label>
-                    <input
-                      type="text"
-                      value={navigator.platform}
-                      readOnly
-                      className="input bg-gray-50 dark:bg-gray-700"
-                    />
-                  </div>
-                  
-                  <div className="form-group">
-                    <label className="form-label">User Agent</label>
-                    <textarea
-                      rows={3}
-                      value={navigator.userAgent}
-                      readOnly
-                      className="input bg-gray-50 dark:bg-gray-700 resize-none text-xs"
-                    />
-                  </div>
-                </div>
-                
-                <div className="space-y-4">
-                  <div className="form-group">
-                    <label className="form-label">Database Status</label>
-                    <div className={`flex items-center p-3 rounded-lg ${
-                      connectionStatus.isConnected 
-                        ? 'bg-green-50 dark:bg-green-900/30 text-green-800 dark:text-green-300'
-                        : 'bg-red-50 dark:bg-red-900/30 text-red-800 dark:text-red-300'
-                    }`}>
-                      {connectionStatus.isConnected ? (
-                        <CheckCircle className="h-5 w-5 mr-2" />
-                      ) : (
-                        <AlertTriangle className="h-5 w-5 mr-2" />
-                      )}
-                      <span className="font-medium">
-                        {connectionStatus.isConnected ? 'Connected to Supabase' : 'Database Disconnected'}
-                      </span>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {[
+                  { to: '/about', label: 'About Us', desc: 'Learn more about PrintGet', icon: Info, color: 'blue' },
+                  { to: '/terms', label: 'Terms & Conditions', desc: 'Usage rules for shop owners', icon: FileText, color: 'indigo' },
+                  { to: '/privacy', label: 'Privacy Policy', desc: 'How we handle your data', icon: ShieldCheck, color: 'green' },
+                  { to: '/refund-policy', label: 'Refund Policy', desc: 'Guidelines for customer refunds', icon: RefreshCw, color: 'orange' },
+                  { to: '/cookie-policy', label: 'Cookie Policy', desc: 'Local storage and cache usage', icon: Database, color: 'purple' },
+                  { to: '/contact', label: 'Partner Support', desc: 'Get help with your shop', icon: HelpCircle, color: 'rose' },
+                ].map((item) => (
+                  <Link 
+                    key={item.to}
+                    to={item.to} 
+                    className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-800/50 hover:bg-white dark:hover:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-xl transition-all group shadow-sm hover:shadow-md hover:-translate-y-0.5"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center group-hover:scale-110 transition-transform bg-${item.color}-100 dark:bg-${item.color}-900/30 text-${item.color}-600 dark:text-${item.color}-400`}>
+                        <item.icon className="w-5 h-5" />
+                      </div>
+                      <div className="min-w-0">
+                        <h4 className="font-semibold text-gray-900 dark:text-white text-sm truncate">{item.label}</h4>
+                        <p className="text-[10px] text-gray-500 dark:text-gray-400 truncate">{item.desc}</p>
+                      </div>
                     </div>
-                  </div>
-                  
-                  <div className="form-group">
-                    <label className="form-label">Supabase URL</label>
-                    <div className="relative">
-                      <input
-                        type="text"
-                        value="https://nnqqdlrarfdjmyjsxxrw.supabase.co"
-                        readOnly
-                        className="input bg-gray-50 dark:bg-gray-700 pr-10 text-sm"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => copyToClipboard('https://nnqqdlrarfdjmyjsxxrw.supabase.co', 'url')}
-                        className="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                      >
-                        {copied === 'url' ? <CheckCircle className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-                      </button>
-                    </div>
-                  </div>
-                  
-                  <div className="form-group">
-                    <label className="form-label">Project Actions</label>
-                    <div className="flex gap-3">
-                      <a
-                        href="https://supabase.com/dashboard/project/nnqqdlrarfdjmyjsxxrw"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="btn-secondary flex-1 text-center"
-                      >
-                        <ExternalLink className="h-4 w-4 mr-2" />
-                        Open Dashboard
-                      </a>
-                      <button
-                        onClick={testSupabaseConnection}
-                        disabled={connectionStatus.testing}
-                        className="btn-primary flex-1 disabled:opacity-50"
-                      >
-                        <RefreshCw className={`h-4 w-4 mr-2 ${connectionStatus.testing ? 'animate-spin' : ''}`} />
-                        Test Connection
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                    <ArrowRight className="w-4 h-4 text-gray-400 group-hover:translate-x-1 transition-transform flex-shrink-0" />
+                  </Link>
+                ))}
               </div>
             </div>
           </div>
         )}
+
       </div>
     </div>
   );

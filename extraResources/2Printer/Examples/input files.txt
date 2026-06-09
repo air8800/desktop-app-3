@@ -1,0 +1,2 @@
+..\readme.txt
+..\license.txt

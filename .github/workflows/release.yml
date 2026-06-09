@@ -2,6 +2,9 @@ name: Build and Publish Release
 
 on:
   workflow_dispatch: # This allows you to click a button on GitHub to trigger the release
+  push:
+    branches:
+      - main
 
 jobs:
   build:

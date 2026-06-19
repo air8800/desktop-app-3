@@ -503,29 +503,65 @@ app.whenReady().then(() => {
 
   createWindow();
 
-  // Check for updates on startup
+  // ============================================================
+  // AUTO-UPDATER — Full IPC-driven (sends events to renderer UI)
+  // ============================================================
   if (!isDev) {
-    autoUpdater.checkForUpdatesAndNotify().catch(err => {
-      console.error('Failed to check for updates:', err);
+    const sendUpdateEvent = (event, data) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('updater-event', { event, ...data });
+      }
+    };
+
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+
+    autoUpdater.on('checking-for-update', () => {
+      console.log('🔍 Checking for updates...');
+      sendUpdateEvent('checking', {});
     });
 
     autoUpdater.on('update-available', (info) => {
-      console.log('Update available:', info.version);
+      console.log('🆕 Update available:', info.version);
+      sendUpdateEvent('available', { version: info.version, releaseNotes: info.releaseNotes });
+    });
+
+    autoUpdater.on('update-not-available', (info) => {
+      console.log('✅ App is up to date:', info.version);
+      sendUpdateEvent('not-available', { version: info.version });
+    });
+
+    autoUpdater.on('download-progress', (progress) => {
+      console.log(`⬇️ Downloading update: ${Math.round(progress.percent)}%`);
+      sendUpdateEvent('progress', {
+        percent: Math.round(progress.percent),
+        transferred: progress.transferred,
+        total: progress.total,
+        bytesPerSecond: progress.bytesPerSecond
+      });
     });
 
     autoUpdater.on('update-downloaded', (info) => {
-      dialog.showMessageBox({
-        type: 'info',
-        title: 'Update Ready',
-        message: 'A new version of PrintGet Shop Manager has been downloaded. Restart the application to apply the updates.',
-        buttons: ['Restart and Install', 'Install Later']
-      }).then((result) => {
-        if (result.response === 0) {
-          allowQuit = true;
-          autoUpdater.quitAndInstall();
-        }
-      });
+      console.log('✅ Update downloaded, ready to install:', info.version);
+      sendUpdateEvent('downloaded', { version: info.version });
     });
+
+    autoUpdater.on('error', (err) => {
+      console.error('❌ Auto-updater error:', err.message);
+      sendUpdateEvent('error', { message: err.message });
+    });
+
+    // Delay first check by 3 seconds so the UI has time to load
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch(err => {
+        console.error('Failed to check for updates:', err);
+      });
+    }, 3000);
+
+    // Also re-check every 2 hours
+    setInterval(() => {
+      autoUpdater.checkForUpdates().catch(console.error);
+    }, 2 * 60 * 60 * 1000);
   }
 
   const startupOAuthUrl = getProtocolUrlFromArgv(process.argv);
@@ -544,6 +580,32 @@ ipcMain.handle('app-quit-confirmed', async () => {
   allowQuit = true;
   if (mainWindow) mainWindow.close();
   return { success: true };
+});
+
+// Auto-updater IPC handlers — called by the renderer UI
+ipcMain.handle('updater-install-now', async () => {
+  try {
+    allowQuit = true;
+    autoUpdater.quitAndInstall(false, true);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('updater-check-now', async () => {
+  try {
+    if (!isDev) {
+      await autoUpdater.checkForUpdates();
+    }
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('updater-get-version', () => {
+  return { version: app.getVersion() };
 });
 
 // ============================================================================

@@ -105,6 +105,16 @@ contextBridge.exposeInMainWorld(
     onDownloadUpdate: (callback) => {
       ipcRenderer.on("download-update", (event, data) => callback(data));
       return () => ipcRenderer.removeAllListeners("download-update");
-    }
+    },
+
+    // ── Auto-Updater bridge ──────────────────────────────────────────────────
+    onUpdaterEvent: (callback) => {
+      const handler = (_event, data) => callback(data);
+      ipcRenderer.on("updater-event", handler);
+      return () => ipcRenderer.removeListener("updater-event", handler);
+    },
+    installUpdate: () => ipcRenderer.invoke("updater-install-now"),
+    checkForUpdates: () => ipcRenderer.invoke("updater-check-now"),
+    getAppVersion: () => ipcRenderer.invoke("updater-get-version"),
   }
 );

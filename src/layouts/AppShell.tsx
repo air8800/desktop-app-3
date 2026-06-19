@@ -1,6 +1,7 @@
 import React from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
+import UpdateBanner from '../components/UpdateBanner';
 
 interface AppShellProps {
   isSidebarOpen: boolean;
@@ -30,7 +31,12 @@ const AppShell: React.FC<AppShellProps> = ({
       jobs={jobs}
       printers={printers}
     />
-    <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+    <div className="flex-1 flex flex-col overflow-hidden min-w-0 relative">
+      {/* Update banner — floats in the top-right corner of main content */}
+      <div className="absolute top-3 right-4 z-50 pointer-events-auto">
+        <UpdateBanner />
+      </div>
+
       <main className="flex-1 overflow-y-auto container-max-space bg-gray-50 dark:bg-gray-900">
         {padded ? (
           <div className="p-4 lg:p-6 xl:p-8 min-h-full">

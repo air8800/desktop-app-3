@@ -866,15 +866,6 @@ const Dashboard: React.FC = () => {
           </div>
 
           <div className="flex gap-3">
-            {/* Auto-print toggle */}
-            <button
-              onClick={toggleAutoProcessing}
-              className={`btn-secondary ${autoProcessingDisabled ? 'bg-gray-100 dark:bg-gray-700' : 'bg-green-100 dark:bg-green-700 text-green-800 dark:text-green-300'}`}
-            >
-              <span className={`inline-block w-4 h-4 rounded-full mr-2 ${autoProcessingDisabled ? 'bg-gray-400' : 'bg-green-500'}`}></span>
-              Auto-Print: {autoProcessingDisabled ? 'Off' : 'On'}
-            </button>
-
             {/* Refresh Button */}
             <button
               onClick={handleRefresh}

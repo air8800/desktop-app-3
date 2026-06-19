@@ -64,7 +64,7 @@ export const validatePhone = (phone: string): boolean => {
   return /^[+]?[1-9][\d]{9,15}$/.test(digits);
 };
 
-async function applySupabaseSession(accessToken: string, refreshToken?: string) {
+export async function applySupabaseSession(accessToken: string, refreshToken?: string) {
   if (!accessToken) return;
 
   let refresh = refreshToken;

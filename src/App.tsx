@@ -16,7 +16,8 @@ import RefundPolicyPage from './pages/RefundPolicyPage';
 import TermsPage from './pages/TermsPage';
 
 import { ThemeProvider } from './context/ThemeContext';
-import { validateSession, initializeAuth, logout, completeOAuthFromTokens } from './utils/auth';
+import { applySupabaseSession, initializeAuth, logout, completeOAuthFromTokens } from './utils/auth';
+import { getStoredSession, clearStoredSession } from './utils/sessionStorage';
 import { parseOAuthCallbackUrl } from './utils/partnerAuthApi';
 import { getCachedPrinters } from './utils/printerCache';
 import { supabase, getPrintJobs, subscribeToNewJobs } from './utils/supabase';
@@ -152,14 +153,25 @@ function App() {
   useEffect(() => {
     const boot = async () => {
       try {
-        const session = await validateSession();
-        if (session.isValid && session.user) {
+        // ⚡ FAST PATH: Read session from local cache (no network call)
+        // This makes the "Initializing..." screen disappear instantly.
+        const stored = await getStoredSession();
+        if (stored?.accessToken && stored.user) {
+          const shopId = stored.shopId || stored.user.shopId;
+          const hasShop = !!shopId && !!localStorage.getItem('shop-id');
           setIsAuthenticated(true);
-          setCurrentUser(session.user);
-          setNeedsOnboarding(!!session.needsOnboarding);
+          setCurrentUser({ ...stored.user, shopId });
+          setNeedsOnboarding(!hasShop);
+
+          // 🔄 BACKGROUND: Rehydrate Supabase session after UI is visible
+          setTimeout(() => {
+            applySupabaseSession(stored.accessToken, stored.refreshToken)
+              .catch(e => console.warn('Background session rehydration failed:', e));
+          }, 500);
         }
       } catch (error) {
         console.error('Auth check error:', error);
+        await clearStoredSession();
       }
       setIsLoading(false);
     };

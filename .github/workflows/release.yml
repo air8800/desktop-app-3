@@ -16,16 +16,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           lfs: true
-      
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          
+          cache: 'npm'
+
       - name: Install Dependencies
-        run: npm install
-        
+        run: npm ci
+
       - name: Build and Publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Skip native module rebuild (no native Electron modules in this app)
+          ELECTRON_BUILDER_SKIP_REBUILD: 'true'
         run: npm run dist -- --publish always

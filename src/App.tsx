@@ -158,7 +158,18 @@ function App() {
         const stored = await getStoredSession();
         if (stored?.accessToken && stored.user) {
           const shopId = stored.shopId || stored.user.shopId;
-          const hasShop = !!shopId && !!localStorage.getItem('shop-id');
+
+          // FIX: In Electron, the session is stored in electron-store, NOT
+          // localStorage. So we trust shopId from the stored session directly
+          // instead of double-checking localStorage (which would always be empty
+          // in Electron, causing needsOnboarding=true → registration screen).
+          const hasShop = !!shopId;
+
+          // Sync shopId to localStorage so the rest of the app can find it
+          if (shopId) {
+            localStorage.setItem('shop-id', shopId);
+          }
+
           setIsAuthenticated(true);
           setCurrentUser({ ...stored.user, shopId });
           setNeedsOnboarding(!hasShop);
@@ -179,6 +190,7 @@ function App() {
     const { unsubscribe } = initializeAuth();
     return () => unsubscribe();
   }, []);
+
 
   const handleLogin = (userData: any) => {
     setAuthError('');

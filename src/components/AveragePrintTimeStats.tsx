@@ -21,13 +21,16 @@ interface PrintHistoryItem {
 
 interface PrinterStats {
     printerName: string;
-    avgTime: number;
+    avgTime: number;      // avg seconds per PAGE
     jobCount: number;
+    sumTime: number;      // total accumulated seconds
+    sumPages: number;     // total accumulated pages
     combinations: {
         [key: string]: { // key: "A4 - Color - Single"
             totalTime: number;
+            totalPages: number;
             count: number;
-            avg: number;
+            avg: number;  // avg seconds per PAGE
             details: string;
         }
     };
@@ -52,26 +55,33 @@ const AveragePrintTimeStats: React.FC<AveragePrintTimeStatsProps> = ({ jobs }) =
                         printerName,
                         avgTime: 0,
                         jobCount: 0,
+                        sumTime: 0,
+                        sumPages: 0,
                         combinations: {}
                     });
                 }
 
                 const pStats = statsMap.get(printerName)!;
+                const pages = (settings.pages && settings.pages > 0) ? settings.pages : 1;
                 pStats.jobCount++;
-                // Running average for total
-                pStats.avgTime = ((pStats.avgTime * (pStats.jobCount - 1)) + duration) / pStats.jobCount;
+                pStats.sumTime += duration;
+                pStats.sumPages += pages;
+                // Avg time per PAGE (not per job)
+                pStats.avgTime = pStats.sumTime / pStats.sumPages;
 
                 // Combination breakdown
                 const comboKey = `${settings.paper_size || 'Default'} • ${settings.color_mode || 'Default'} • ${settings.print_type || 'Default'}`;
 
                 if (!pStats.combinations[comboKey]) {
-                    pStats.combinations[comboKey] = { totalTime: 0, count: 0, avg: 0, details: comboKey };
+                    pStats.combinations[comboKey] = { totalTime: 0, totalPages: 0, count: 0, avg: 0, details: comboKey };
                 }
 
                 const combo = pStats.combinations[comboKey];
                 combo.count++;
                 combo.totalTime += duration;
-                combo.avg = combo.totalTime / combo.count;
+                combo.totalPages += pages;
+                // Avg time per PAGE for this combo
+                combo.avg = combo.totalTime / combo.totalPages;
             };
 
             // 1. Load Local Storage History (Primary Source for Printer Names)

@@ -1,7 +1,7 @@
 {
   "name": "printget-shop-manager",
   "private": true,
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "PrintGet Shop Manager — desktop app for print shop partners",
   "author": "PrintGet",
   "license": "UNLICENSED",
@@ -15,7 +15,9 @@
     "predist": "npm run icons",
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "electron:preview": "npm run build && electron .",
-    "dist": "npm run build && electron-builder --win --x64",
+    "dist": "npm run build && electron-builder --win",
+    "dist:x64": "npm run build && electron-builder --win --x64",
+    "dist:ia32": "npm run build && electron-builder --win --ia32",
     "dist:dir": "npm run build && electron-builder --win --x64 --dir",
     "electron:build": "npm run dist"
   },
@@ -106,7 +108,8 @@
         {
           "target": "nsis",
           "arch": [
-            "x64"
+            "x64",
+            "ia32"
           ]
         }
       ],

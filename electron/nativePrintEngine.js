@@ -41,12 +41,19 @@ const isPDFPrinterAppAvailable = (isDev) => {
 };
 
 // SumatraPDF path helpers
+// Automatically selects the correct binary for the OS architecture:
+//   - 64-bit Windows → SumatraPDF.exe     (x64 build)
+//   - 32-bit Windows → SumatraPDF-3.6.1-32.exe  (x86 build, runs via WOW64 on 64-bit too)
 const getSumatraPath = (isDev) => {
-  if (isDev) {
-    return path.join(__dirname, '..', 'extraResources', 'SumatraPDF.exe');
-  } else {
-    return path.join(process.resourcesPath, 'extraResources', 'SumatraPDF.exe');
-  }
+  const is32bit = process.arch === 'ia32';
+  const sumatraExe = is32bit ? 'SumatraPDF-3.6.1-32.exe' : 'SumatraPDF.exe';
+  console.log(`🔍 [SumatraPDF] OS arch: ${process.arch} → using: ${sumatraExe}`);
+
+  const base = isDev
+    ? path.join(__dirname, '..', 'extraResources')
+    : path.join(process.resourcesPath, 'extraResources');
+
+  return path.join(base, sumatraExe);
 };
 
 const isSumatraAvailable = (isDev) => {

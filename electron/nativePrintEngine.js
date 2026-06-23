@@ -205,38 +205,28 @@ const printWithPDFtoPrinter = async (filePath, printerName, options = {}, isDev 
       await new Promise(resolve => setTimeout(resolve, 500));
     }
 
-    // Execute for each copy with retry logic
+    // Execute command with retry logic (no loop for copies, handled by preprocessing)
     const MAX_RETRIES = 3;
-    for (let i = 0; i < copies; i++) {
-      let lastError;
-      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-        try {
-          await execPromise(command);
-          if (copies > 1) {
-            console.log(`✅ Copy ${i + 1}/${copies} sent`);
-          }
-          lastError = null;
-          break; // Success, move to next copy
-        } catch (execError) {
-          lastError = execError;
-          // Exit code 11 = "PDFtoPrinter is already at work"
-          if (execError.code === 11 && attempt < MAX_RETRIES) {
-            const delay = attempt * 2000; // 2s, 4s
-            console.warn(`⚠️ PDFtoPrinter busy (attempt ${attempt}/${MAX_RETRIES}), killing stale processes and retrying in ${delay / 1000}s...`);
-            await killStalePDFtoPrinter();
-            await new Promise(resolve => setTimeout(resolve, delay));
-          } else {
-            throw execError;
-          }
+    let lastError;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        await execPromise(command);
+        lastError = null;
+        break; // Success
+      } catch (execError) {
+        lastError = execError;
+        // Exit code 11 = "PDFtoPrinter is already at work"
+        if (execError.code === 11 && attempt < MAX_RETRIES) {
+          const delay = attempt * 2000; // 2s, 4s
+          console.warn(`⚠️ PDFtoPrinter busy (attempt ${attempt}/${MAX_RETRIES}), killing stale processes and retrying in ${delay / 1000}s...`);
+          await killStalePDFtoPrinter();
+          await new Promise(resolve => setTimeout(resolve, delay));
+        } else {
+          throw execError;
         }
       }
-      if (lastError) throw lastError;
-
-      // Small delay between copies to prevent overlap
-      if (i < copies - 1) {
-        await new Promise(resolve => setTimeout(resolve, 1500));
-      }
     }
+    if (lastError) throw lastError;
 
     console.log('✅ PDFtoPrinter print job sent successfully');
 
@@ -614,6 +604,30 @@ const resizePdfToPaperSize = async (pdfBytes, targetPaperSize = 'A4', nupPages =
   }
 };
 
+const duplicatePdfPages = async (pdfBytes, copies) => {
+  if (copies <= 1) return pdfBytes;
+  try {
+    console.log(`📄 Duplicating PDF pages (${copies} copies) to avoid multiple spool jobs...`);
+    const sourcePdf = await PDFDocument.load(pdfBytes);
+    const newPdf = await PDFDocument.create();
+    const sourcePages = sourcePdf.getPages();
+    
+    // Copy all pages once to get templates
+    const copiedPages = await newPdf.copyPages(sourcePdf, sourcePages.map((_, i) => i));
+    
+    for (let i = 0; i < copies; i++) {
+      copiedPages.forEach((page) => newPdf.addPage(page));
+    }
+    
+    const newPdfBytes = await newPdf.save();
+    console.log(`✅ PDF pages duplicated. New size: ${(newPdfBytes.length / 1024 / 1024).toFixed(2)} MB`);
+    return newPdfBytes;
+  } catch (error) {
+    console.error('❌ PDF page duplication failed:', error);
+    return pdfBytes;
+  }
+};
+
 const processPdf = async (inputPath, options = {}) => {
   try {
     const {
@@ -621,12 +635,17 @@ const processPdf = async (inputPath, options = {}) => {
       nupPages = 1,
       nupOrientation = 'portrait',
       colorMode = 'BW',
-      orderMark = null
+      orderMark = null,
+      copies = 1
     } = options;
 
-    console.log('🔄 Processing PDF with pdf-lib:', { paperSize, nupPages, nupOrientation, colorMode });
+    console.log('🔄 Processing PDF with pdf-lib:', { paperSize, nupPages, nupOrientation, colorMode, copies });
 
     let pdfBytes = fs.readFileSync(inputPath);
+
+    if (copies > 1) {
+      pdfBytes = await duplicatePdfPages(pdfBytes, copies);
+    }
 
     if (nupPages > 1) {
       pdfBytes = await createNupLayout(pdfBytes, nupPages, paperSize, nupOrientation);
@@ -907,7 +926,8 @@ const printPdfNatively = async (filePath, printerName, options = {}, isDev = tru
       nupPages,
       nupOrientation: nupLayoutOrientation,
       colorMode,
-      orderMark
+      orderMark,
+      copies
     });
 
     if (processResult.success) {
@@ -931,7 +951,7 @@ const printPdfNatively = async (filePath, printerName, options = {}, isDev = tru
       console.log('🚀 Using PDFtoPrinter (primary — free, vectors preserved)...');
       try {
         const result = await printWithPDFtoPrinter(printFilePath, printerName, {
-          copies,
+          copies: 1, // Pages already duplicated by processPdf
           paperSize,
           colorMode,
           nupOrientation: 'portrait'
@@ -942,7 +962,7 @@ const printPdfNatively = async (filePath, printerName, options = {}, isDev = tru
         return {
           success: true,
           engine: 'PDFtoPrinter',
-          message: result.message,
+          message: `Print job sent to ${printerName} via PDFtoPrinter: ${copies} copies (pre-duplicated), ${paperSize}, ${colorMode}`,
           paperSize,
           copies,
           colorMode
@@ -956,7 +976,7 @@ const printPdfNatively = async (filePath, printerName, options = {}, isDev = tru
     if (isSumatraAvailable(isDev)) {
       console.log('⚠️ Falling back to SumatraPDF (last resort)...');
       const result = await printWithSumatra(printFilePath, printerName, {
-        copies,
+        copies: 1, // Pages already duplicated by processPdf
         paperSize,
         colorMode,
         printType,
@@ -967,7 +987,7 @@ const printPdfNatively = async (filePath, printerName, options = {}, isDev = tru
       return {
         success: true,
         engine: 'SumatraPDF',
-        message: result.message,
+        message: `Print job sent to ${printerName} via SumatraPDF: ${copies} copies (pre-duplicated), ${paperSize}, ${colorMode}`,
         paperSize,
         copies,
         colorMode

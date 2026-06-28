@@ -1,11 +1,12 @@
 "use strict";
 
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, protocol, session } = require('electron');
+if (require('electron-squirrel-startup')) return require('electron').app.quit();
+
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, protocol, session, autoUpdater } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { autoUpdater } = require('electron-updater');
 
-autoUpdater.logger = console;
+
 const isDev = require('electron-is-dev');
 const {
   APP_NAME,
@@ -513,54 +514,49 @@ app.whenReady().then(() => {
       }
     };
 
-    autoUpdater.autoDownload = true;
-    autoUpdater.autoInstallOnAppQuit = true;
+    // Use native autoUpdater pointed DIRECTLY to GitHub releases (bypasses broken proxies)
+    const feed = 'https://github.com/air8800/desktop-app-3/releases/latest/download';
+    autoUpdater.setFeedURL({ url: feed });
+
+    let updateDownloaded = false;  // guard: never re-download if already done
 
     autoUpdater.on('checking-for-update', () => {
       console.log('🔍 Checking for updates...');
       sendUpdateEvent('checking', {});
     });
 
-    autoUpdater.on('update-available', (info) => {
-      console.log('🆕 Update available:', info.version);
-      sendUpdateEvent('available', { version: info.version, releaseNotes: info.releaseNotes });
+    autoUpdater.on('update-available', () => {
+      console.log('🆕 Update available, downloading...');
+      sendUpdateEvent('available', { version: 'latest', releaseNotes: '' });
     });
 
-    autoUpdater.on('update-not-available', (info) => {
-      console.log('✅ App is up to date:', info.version);
-      sendUpdateEvent('not-available', { version: info.version });
+    autoUpdater.on('update-not-available', () => {
+      console.log('✅ App is up to date.');
+      sendUpdateEvent('not-available', { version: app.getVersion() });
     });
 
-    autoUpdater.on('download-progress', (progress) => {
-      console.log(`⬇️ Downloading update: ${Math.round(progress.percent)}%`);
-      sendUpdateEvent('progress', {
-        percent: Math.round(progress.percent),
-        transferred: progress.transferred,
-        total: progress.total,
-        bytesPerSecond: progress.bytesPerSecond
-      });
-    });
-
-    autoUpdater.on('update-downloaded', (info) => {
-      console.log('✅ Update downloaded, ready to install:', info.version);
-      sendUpdateEvent('downloaded', { version: info.version });
+    autoUpdater.on('update-downloaded', (event, releaseNotes, releaseName) => {
+      console.log('✅ Update downloaded, ready to install:', releaseName);
+      updateDownloaded = true;
+      sendUpdateEvent('downloaded', { version: releaseName });
     });
 
     autoUpdater.on('error', (err) => {
-      console.error('❌ Auto-updater error:', err.message);
-      sendUpdateEvent('error', { message: err.message });
+      console.error('❌ Auto-updater error:', err.message, err.stack || '');
+      const fullError = `${err.message || 'Unknown error'}\n\nStack:\n${err.stack || 'No stack trace available'}`;
+      sendUpdateEvent('error', { message: fullError });
     });
 
     // Delay first check by 3 seconds so the UI has time to load
     setTimeout(() => {
-      autoUpdater.checkForUpdates().catch(err => {
-        console.error('Failed to check for updates:', err);
-      });
+      autoUpdater.checkForUpdates();
     }, 3000);
 
-    // Also re-check every 2 hours
+    // Re-check every 2 hours — but skip if already downloaded
     setInterval(() => {
-      autoUpdater.checkForUpdates().catch(console.error);
+      if (!updateDownloaded) {
+        autoUpdater.checkForUpdates();
+      }
     }, 2 * 60 * 60 * 1000);
   }
 
@@ -586,17 +582,30 @@ ipcMain.handle('app-quit-confirmed', async () => {
 ipcMain.handle('updater-install-now', async () => {
   try {
     allowQuit = true;
-    autoUpdater.quitAndInstall(false, true);
+    const store = new Store();
+    store.set('updateCompleted', true); // flag for next boot
+    autoUpdater.quitAndInstall();
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message };
   }
 });
 
+ipcMain.handle('get-update-completed-status', () => {
+  const store = new Store();
+  return store.get('updateCompleted', false);
+});
+
+ipcMain.handle('clear-update-completed-status', () => {
+  const store = new Store();
+  store.set('updateCompleted', false);
+  return true;
+});
+
 ipcMain.handle('updater-check-now', async () => {
   try {
     if (!isDev) {
-      await autoUpdater.checkForUpdates();
+      autoUpdater.checkForUpdates();
     }
     return { success: true };
   } catch (err) {

@@ -81,6 +81,7 @@ export interface PrintJob {
 export interface Printer {
   name: string;
   status: string;
+  isVirtual?: boolean;
   default: boolean;
   supportedSizes?: PaperSize[];
   supportsColor?: boolean;

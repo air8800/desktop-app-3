@@ -54,7 +54,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, toggleSidebar, currentUser, o
   return (
     <div
       className={`${isOpen ? 'w-64' : 'w-16'
-        } h-screen backdrop-blur-glass bg-white/90 dark:bg-gray-900/90 text-gray-800 dark:text-white shadow-2xl transition-all duration-300 ease-in-out flex flex-col relative flex-shrink-0 border-r border-gray-200/30 dark:border-gray-700/30 sidebar-container`}
+        } h-screen z-40 backdrop-blur-glass bg-white/90 dark:bg-gray-900/90 text-gray-800 dark:text-white shadow-2xl transition-all duration-300 ease-in-out flex flex-col relative flex-shrink-0 border-r border-gray-200/30 dark:border-gray-700/30 sidebar-container`}
       onClick={handleEmptyAreaClick}
     >
       {/* Header */}
@@ -65,7 +65,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, toggleSidebar, currentUser, o
               <PrintGetLogo size="md" />
               <div className="flex items-center gap-2 mt-1.5 ml-0.5">
                 <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                <p className="text-xs text-gray-500 font-medium">Shop Manager {appVersion && <span className="text-gray-400 text-[10px] ml-1">v{appVersion}</span>}</p>
+                <p className="text-xs text-gray-500 font-medium">Shop Manager</p>
               </div>
             </div>
           ) : (

@@ -825,9 +825,34 @@ ipcMain.handle('get-printers', async () => {
 
     if (process.platform === 'win32') {
       try {
+        const PHYSICAL_PORT_PREFIXES = ['USB', 'DOT4', 'LPT', 'COM', 'WSD', 'IP_', 'TCP', 'BRN', 'SEC', '192.', '10.', '172.'];
+        const VIRTUAL_NAME_KEYWORDS = [
+          'pdf', 'xps', 'fax', 'onenote', 'microsoft print', 'microsoft xps',
+          'adobe pdf', 'cutepdf', 'dopdf', 'bullzip', 'foxit', 'nitro',
+          'primopdf', 'pdf24', 'pdfcreator', 'print to', 'send to',
+          'snagit', 'camtasia', 'image writer', 'ghostscript', 'docuprint'
+        ];
+
+        const isVirtualByPort = (portName) => {
+          if (!portName) return true; // no port = virtual
+          const up = portName.toUpperCase().trim();
+          // Known physical port prefixes → NOT virtual
+          if (PHYSICAL_PORT_PREFIXES.some(p => up.startsWith(p))) return false;
+          // Network share paths (\\\\server\\printer) → NOT virtual
+          if (up.startsWith('\\\\')) return false;
+          // Everything else (PORTPROMPT, FILE, NUL, TS*, MSFAX, etc.) → virtual
+          return true;
+        };
+
+        const isVirtualByName = (name) => {
+          if (!name) return false;
+          const lower = name.toLowerCase();
+          return VIRTUAL_NAME_KEYWORDS.some(kw => lower.includes(kw));
+        };
+
         // Use PowerShell command with proper syntax
         const { stdout } = await execPromise(
-          'powershell.exe -Command "Get-Printer | Select-Object Name,PrinterStatus,IsDefault | ConvertTo-Json"'
+          'powershell.exe -Command "Get-Printer | Select-Object Name,PrinterStatus,IsDefault,PortName | ConvertTo-Json"'
         );
         if (stdout) {
           const systemPrinters = JSON.parse(stdout);
@@ -836,6 +861,7 @@ ipcMain.handle('get-printers', async () => {
           printers = printersArray.map(printer => ({
             name: printer.Name,
             status: printer.PrinterStatus === 1 ? 'Ready' : 'Not Ready',
+            isVirtual: isVirtualByPort(printer.PortName) || isVirtualByName(printer.Name),
             default: printer.IsDefault || false
           }));
         }
